@@ -1,6 +1,7 @@
 # PicHost
 
 私人图床，基于 FastAPI + 本地存储，支持密钥登录。
+![example](example.png)
 
 ## 功能
 
