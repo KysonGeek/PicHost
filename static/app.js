@@ -27,6 +27,15 @@ let galleryTotal = 0;
 const PER_PAGE = 50;
 let toastTimer = null;
 
+const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;  // keep in sync with backend MAX_SIZE
+const ALLOWED_UPLOAD_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml',
+]);
+
+// In-flight uploads keyed by a sequence id, for aggregate progress display.
+const inflightUploads = new Map();
+let uploadSeq = 0;
+
 /* ── Auth ─────────────────────────────────────────────────────────────────── */
 const TOKEN_KEY = 'pichost_token';
 
@@ -129,13 +138,41 @@ document.addEventListener('paste', e => {
 /* ── Upload ───────────────────────────────────────────────────────────────── */
 function uploadFiles(files) { files.forEach(f => uploadSingle(f)); }
 
+// Aggregate progress across all in-flight uploads, so concurrent uploads share
+// one honest bar instead of clobbering each other.
+function renderUploadProgress() {
+  if (inflightUploads.size === 0) {
+    progressWrap.style.display = 'none';
+    progressBar.style.width = '0%';
+    return;
+  }
+  let loaded = 0, total = 0;
+  for (const s of inflightUploads.values()) { loaded += s.loaded; total += s.total; }
+  const pct = total ? Math.round((loaded / total) * 100) : 0;
+  progressWrap.style.display = 'block';
+  progressBar.style.width = pct + '%';
+  progressText.textContent = inflightUploads.size > 1
+    ? `${pct}% · ${inflightUploads.size} 个文件`
+    : `${pct}%`;
+}
+
 function uploadSingle(file) {
+  if (file.size > MAX_UPLOAD_SIZE) {
+    showToast(`${file.name || '文件'} 超过 20MB 限制`, 'error');
+    return;
+  }
+  if (file.type && !ALLOWED_UPLOAD_TYPES.has(file.type)) {
+    showToast(`不支持的文件类型：${file.type}`, 'error');
+    return;
+  }
+
   const formData = new FormData();
   formData.append('file', file);
 
-  progressWrap.style.display = 'block';
-  progressBar.style.width = '0%';
-  progressText.textContent = '0%';
+  const id = ++uploadSeq;
+  inflightUploads.set(id, { loaded: 0, total: file.size || 0 });
+  renderUploadProgress();
+  const finish = () => { inflightUploads.delete(id); renderUploadProgress(); };
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/api/upload');
@@ -143,14 +180,13 @@ function uploadSingle(file) {
 
   xhr.upload.addEventListener('progress', e => {
     if (e.lengthComputable) {
-      const pct = Math.round((e.loaded / e.total) * 100);
-      progressBar.style.width = pct + '%';
-      progressText.textContent = pct + '%';
+      inflightUploads.set(id, { loaded: e.loaded, total: e.total });
+      renderUploadProgress();
     }
   });
 
   xhr.addEventListener('load', () => {
-    progressWrap.style.display = 'none';
+    finish();
     if (xhr.status === 200) {
       const data = JSON.parse(xhr.responseText);
       prependResult(data);
@@ -169,7 +205,7 @@ function uploadSingle(file) {
   });
 
   xhr.addEventListener('error', () => {
-    progressWrap.style.display = 'none';
+    finish();
     showToast('网络错误，上传失败', 'error');
   });
 
@@ -187,16 +223,23 @@ async function authFetch(url, options = {}) {
 }
 
 /* ── Result panel ─────────────────────────────────────────────────────────── */
+// Build the copyable link snippets. The name is attacker-controlled (it is the
+// original upload filename), so escape it for the context it lands in.
+function buildLinks(url, name) {
+  const n = name || '';
+  return [
+    { label: '直链',      value: url },
+    { label: 'BBCode',   value: `[img]${url}[/img]` },
+    { label: 'Markdown', value: `![${escMarkdown(n)}](${url})` },
+    { label: 'HTML',     value: `<img src="${url}" alt="${escHtml(n)}">` },
+  ];
+}
+
 function prependResult(data) {
   const origin = window.location.origin;
   const url    = `${origin}/uploads/${data.filename}`;
 
-  const links = [
-    { label: '直链',      value: url },
-    { label: 'BBCode',   value: `[img]${url}[/img]` },
-    { label: 'Markdown', value: `![${data.orig_name || data.filename}](${url})` },
-    { label: 'HTML',     value: `<img src="${url}" alt="${data.orig_name || data.filename}">` },
-  ];
+  const links = buildLinks(url, data.orig_name || data.filename);
 
   const item = document.createElement('div');
   item.className = 'result-item';
@@ -243,7 +286,9 @@ async function loadGallery(page = 1, append = false) {
     galleryTotal = data.total;
     updateGalleryCount();
 
-    if (!append) galleryGrid.innerHTML = '';
+    // Keep the paging cursor in sync with a full (re)load, otherwise a later
+    // "load more" resumes from a stale page and skips rows.
+    if (!append) { galleryPage = page; galleryGrid.innerHTML = ''; }
 
     if (data.images.length === 0 && page === 1) {
       galleryGrid.appendChild(galleryEmpty);
@@ -260,8 +305,11 @@ async function loadGallery(page = 1, append = false) {
   }
 }
 
-function appendGalleryItem(data)  { galleryGrid.appendChild(buildGalleryItem(data)); }
-function prependGalleryItem(data) { galleryGrid.prepend(buildGalleryItem(data)); }
+function galleryHas(id) {
+  return !!galleryGrid.querySelector(`.gallery-item[data-id="${CSS.escape(String(id))}"]`);
+}
+function appendGalleryItem(data)  { if (!galleryHas(data.id)) galleryGrid.appendChild(buildGalleryItem(data)); }
+function prependGalleryItem(data) { if (!galleryHas(data.id)) galleryGrid.prepend(buildGalleryItem(data)); }
 
 function buildGalleryItem(data) {
   const url  = `${window.location.origin}/uploads/${data.filename}`;
@@ -322,12 +370,7 @@ function openLightbox(url, name) {
   lightbox.style.display = 'flex';
   document.body.style.overflow = 'hidden';
 
-  const links = [
-    { label: '直链',      value: url },
-    { label: 'BBCode',   value: `[img]${url}[/img]` },
-    { label: 'Markdown', value: `![${name}](${url})` },
-    { label: 'HTML',     value: `<img src="${url}" alt="${name}">` },
-  ];
+  const links = buildLinks(url, name);
 
   const linksEl = document.getElementById('lightboxLinks');
   linksEl.innerHTML = links.map(l => `
@@ -385,7 +428,11 @@ function escHtml(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 function escAttr(str) {
-  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function escMarkdown(str) {
+  return String(str).replace(/[\[\]\\]/g, '\\$&').replace(/[\r\n]+/g, ' ');
 }
 
 /* ── Nav active state ─────────────────────────────────────────────────────── */
