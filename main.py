@@ -1,37 +1,52 @@
+import io
 import os
+import re
 import uuid
 import hmac
 import hashlib
 import time
 import aiosqlite
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Query
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 BASE_DIR = Path(__file__).parent
-UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR = Path(os.environ.get("PICHOST_UPLOAD_DIR", BASE_DIR / "uploads"))
 THUMB_DIR = UPLOAD_DIR / "thumbs"
-DB_PATH = BASE_DIR / "images.db"
+DB_PATH = Path(os.environ.get("PICHOST_DB_PATH", BASE_DIR / "images.db"))
 STATIC_DIR = BASE_DIR / "static"
 ENV_FILE = BASE_DIR / ".env"
 
-UPLOAD_DIR.mkdir(exist_ok=True)
-THUMB_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_MIME = {
     "image/jpeg", "image/png", "image/gif",
     "image/webp", "image/bmp", "image/svg+xml",
 }
 ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
-MAX_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_SIZE = 20 * 1024 * 1024  # 20 MB (compressed upload cap)
+MAX_PIXELS = 50_000_000      # decoded-pixel cap (decompression-bomb / pixel-flood guard)
 THUMB_SIZE = (400, 400)
 TOKEN_EXPIRE_SECONDS = 30 * 86400  # 30 days
+
+# Real (sniffed) Pillow format -> canonical MIME. SVG is handled separately
+# because Pillow cannot decode it.
+PIL_FORMAT_TO_MIME = {
+    "JPEG": "image/jpeg", "PNG": "image/png", "GIF": "image/gif",
+    "WEBP": "image/webp", "BMP": "image/bmp",
+}
+
+# Make Pillow itself refuse absurd images on decode, in addition to our own check.
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -81,9 +96,6 @@ def require_auth(creds: HTTPAuthorizationCredentials = Depends(_bearer)):
 
 
 # ── App ────────────────────────────────────────────────────────────────────────
-app = FastAPI(title="PicHost")
-
-
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -98,12 +110,34 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        # Gallery lists ORDER BY created_at DESC; index it to avoid full sorts.
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_created_at ON images(created_at DESC)"
+        )
         await db.commit()
 
 
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await init_db()
+    yield
+
+
+app = FastAPI(title="PicHost", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    if request.url.path.startswith("/uploads/"):
+        # User-supplied content (esp. SVG): sandbox + no script execution, and
+        # cache forever since filenames are unique per upload.
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        )
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 
 # ── Static files ───────────────────────────────────────────────────────────────
@@ -133,57 +167,48 @@ async def upload(file: UploadFile = File(...)):
     if file.content_type not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"不支持的文件类型: {file.content_type}")
 
-    orig_ext = Path(file.filename).suffix.lower() if file.filename else ""
-    if orig_ext not in ALLOWED_EXT:
-        orig_ext = _mime_to_ext(file.content_type)
-
     content = await file.read()
     if len(content) > MAX_SIZE:
         raise HTTPException(status_code=413, detail="文件大小超过 20MB 限制")
 
     file_id = uuid.uuid4().hex[:12]
-    filename = f"{file_id}{orig_ext}"
-    dest_path = UPLOAD_DIR / filename
-    dest_path.write_bytes(content)
+    is_svg = file.content_type == "image/svg+xml"
 
-    width, height = None, None
+    # Validate the actual bytes and write original + thumbnail, off the event loop.
     try:
-        with Image.open(dest_path) as img:
-            width, height = img.size
-            if file.content_type != "image/svg+xml":
-                thumb = img.copy()
-                thumb.thumbnail(THUMB_SIZE, Image.LANCZOS)
-                if thumb.mode in ("RGBA", "P"):
-                    bg = Image.new("RGB", thumb.size, (255, 255, 255))
-                    if thumb.mode == "P":
-                        thumb = thumb.convert("RGBA")
-                    bg.paste(thumb, mask=thumb.split()[3] if thumb.mode == "RGBA" else None)
-                    thumb = bg
-                thumb.save(THUMB_DIR / filename, quality=85, optimize=True)
-            else:
-                (THUMB_DIR / filename).write_bytes(content)
-    except (UnidentifiedImageError, Exception):
-        pass
+        meta = await run_in_threadpool(_process_upload, content, is_svg, file_id)
+    except _UploadRejected as e:
+        raise HTTPException(status_code=415, detail=str(e))
 
+    filename = meta["filename"]
     created_at = datetime.now(timezone.utc).isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO images VALUES (?,?,?,?,?,?,?,?)",
-            (file_id, filename, file.filename or filename,
-             len(content), width, height, file.content_type, created_at)
-        )
-        await db.commit()
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO images VALUES (?,?,?,?,?,?,?,?)",
+                (file_id, filename, file.filename or filename,
+                 len(content), meta["width"], meta["height"], meta["mime"], created_at)
+            )
+            await db.commit()
+    except Exception:
+        # Don't leak orphaned files if the metadata insert fails.
+        for p in (UPLOAD_DIR / filename, THUMB_DIR / filename):
+            p.unlink(missing_ok=True)
+        raise
 
     return {
         "id": file_id, "filename": filename, "orig_name": file.filename,
-        "size": len(content), "width": width, "height": height,
-        "mime_type": file.content_type, "created_at": created_at,
+        "size": len(content), "width": meta["width"], "height": meta["height"],
+        "mime_type": meta["mime"], "created_at": created_at,
     }
 
 
 # ── Image list ─────────────────────────────────────────────────────────────────
 @app.get("/api/images", dependencies=[Depends(require_auth)])
-async def list_images(page: int = 1, per_page: int = 50):
+async def list_images(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+):
     offset = (page - 1) * per_page
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -193,7 +218,8 @@ async def list_images(page: int = 1, per_page: int = 50):
         ) as cursor:
             rows = await cursor.fetchall()
         async with db.execute("SELECT COUNT(*) FROM images") as cursor:
-            total = (await cursor.fetchone())[0]
+            row = await cursor.fetchone()
+            total = row[0] if row else 0
 
     return {
         "total": total, "page": page, "per_page": per_page,
@@ -233,3 +259,74 @@ def _mime_to_ext(mime: str) -> str:
         "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
         "image/webp": ".webp", "image/bmp": ".bmp", "image/svg+xml": ".svg",
     }.get(mime, ".jpg")
+
+
+class _UploadRejected(Exception):
+    """Raised inside the upload worker when bytes are not a supported image."""
+
+
+def _svg_dimensions(content: bytes):
+    """Best-effort width/height from the SVG root element (None if absent)."""
+    text = content[:1024].decode("utf-8", "ignore")
+    w = re.search(r'\bwidth="(\d+)', text)
+    h = re.search(r'\bheight="(\d+)', text)
+    return (int(w.group(1)) if w else None, int(h.group(1)) if h else None)
+
+
+def _make_thumbnail(img: "Image.Image", dest: Path):
+    thumb = img.copy()
+    thumb.thumbnail(THUMB_SIZE, Image.Resampling.LANCZOS)
+    if thumb.mode in ("RGBA", "LA", "P"):
+        if thumb.mode != "RGBA":
+            thumb = thumb.convert("RGBA")
+        bg = Image.new("RGB", thumb.size, (255, 255, 255))
+        bg.paste(thumb, mask=thumb.split()[3])
+        thumb = bg
+    elif thumb.mode != "RGB":
+        thumb = thumb.convert("RGB")
+    thumb.save(dest, quality=85, optimize=True)
+
+
+def _process_upload(content: bytes, is_svg: bool, file_id: str) -> dict:
+    """Validate bytes, then write the original + thumbnail. Runs in a threadpool.
+
+    Files are written ONLY after validation succeeds, so rejected uploads never
+    persist. Raises _UploadRejected on anything that isn't a supported image.
+    Returns {filename, width, height, mime}.
+    """
+    if is_svg:
+        head = content.lstrip()[:512].lower()
+        if b"<svg" not in head and b"<?xml" not in head:
+            raise _UploadRejected("文件内容不是有效的 SVG")
+        filename = f"{file_id}.svg"
+        (UPLOAD_DIR / filename).write_bytes(content)
+        (THUMB_DIR / filename).write_bytes(content)  # SVG is its own thumbnail
+        width, height = _svg_dimensions(content)
+        return {"filename": filename, "width": width, "height": height, "mime": "image/svg+xml"}
+
+    try:
+        with Image.open(io.BytesIO(content)) as src:
+            mime = PIL_FORMAT_TO_MIME.get((src.format or "").upper())
+            if mime is None:
+                raise _UploadRejected(f"不支持的图片格式: {src.format or 'unknown'}")
+            w0, h0 = src.size
+            if w0 * h0 > MAX_PIXELS:
+                raise _UploadRejected("图片像素数超过限制")
+            # Honour EXIF orientation so thumbnails and stored dimensions match
+            # what browsers render.
+            img = ImageOps.exif_transpose(src) or src
+            width, height = img.size
+            filename = f"{file_id}{_mime_to_ext(mime)}"
+            (UPLOAD_DIR / filename).write_bytes(content)
+            # Thumbnail is a best-effort nicety: a quirky-but-valid image that
+            # fails here still gets stored (client falls back to the full image).
+            try:
+                _make_thumbnail(img, THUMB_DIR / filename)
+            except Exception:
+                pass
+    except _UploadRejected:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as e:
+        raise _UploadRejected("无法解析为图片") from e
+
+    return {"filename": filename, "width": width, "height": height, "mime": mime}
