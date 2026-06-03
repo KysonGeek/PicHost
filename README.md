@@ -46,10 +46,17 @@ Description=PicHost Image Hosting Service
 After=network.target
 
 [Service]
+User=pichost
+Group=pichost
 WorkingDirectory=/opt/app/img
 ExecStart=/usr/local/bin/uvicorn main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 RestartSec=5
+# 基础加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
@@ -66,6 +73,13 @@ img.example.com {
     reverse_proxy 127.0.0.1:8000
 }
 ```
+
+## 安全建议
+
+- **密码强度**：登录接口未做限流，弱密码可能被在线爆破。请使用足够强的随机密码；如需更稳妥，可在 Caddy 中对 `/api/auth/login` 加 `rate_limit`。
+- **用户内容**：`/uploads/*` 由应用以 `Content-Security-Policy: sandbox` + `X-Content-Type-Options: nosniff` 返回，并带 `Cache-Control: immutable` 长缓存——SVG 中的脚本不会执行，图片可永久缓存。
+- **上传校验**：服务端按真实字节（Pillow）校验图片类型，不信任客户端声明的 `Content-Type`，非图片内容会被拒绝（HTTP 415）且不落盘。
+- **`.env` 权限**：务必 `chmod 600 .env`，避免同机其他用户读到密码。
 
 ## 目录结构
 
