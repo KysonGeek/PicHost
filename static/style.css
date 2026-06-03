@@ -407,8 +407,10 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  align-items: center;
 }
 .lightbox-links .link-row {
+  width: 50%;
   display: flex;
   align-items: center;
   gap: 8px;
