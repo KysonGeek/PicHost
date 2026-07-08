@@ -659,6 +659,7 @@ dialogConfirm.addEventListener('click', submitDialog);
 dialogCancel.addEventListener('click', cancelDialog);
 dialogOverlay.addEventListener('click', e => { if (e.target === dialogOverlay) cancelDialog(); });
 dialogInput.addEventListener('keydown', e => {
+  if (e.isComposing || e.keyCode === 229) return;  // IME composition in flight
   if (e.key === 'Enter') { e.preventDefault(); submitDialog(); }
 });
 
@@ -700,6 +701,7 @@ function closeLightbox() {
 document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
 document.getElementById('lightboxBackdrop').addEventListener('click', closeLightbox);
 document.addEventListener('keydown', e => {
+  if (e.isComposing || e.keyCode === 229) return;  // IME composition in flight
   if (e.key === 'Escape') { closeLightbox(); closeMoveModal(); cancelDialog(); }
 });
 
