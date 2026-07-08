@@ -14,6 +14,7 @@ const loadMoreWrap  = document.getElementById('loadMoreWrap');
 const loadMoreBtn   = document.getElementById('loadMoreBtn');
 const lightbox      = document.getElementById('lightbox');
 const lightboxImg   = document.getElementById('lightboxImg');
+const lightboxGlb   = document.getElementById('lightboxGlb');
 const toast         = document.getElementById('toast');
 const loginOverlay  = document.getElementById('loginOverlay');
 const loginForm     = document.getElementById('loginForm');
@@ -245,9 +246,19 @@ async function authFetch(url, options = {}) {
 }
 
 /* ── Result panel ─────────────────────────────────────────────────────────── */
+function isGlbData(data) { return data.mime_type === 'model/gltf-binary'; }
+
+const GLB_ICON = `
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="48" height="48" aria-hidden="true">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+    <line x1="12" y1="22.08" x2="12" y2="12"/>
+  </svg>`;
+
 // Build the copyable link snippets. The name is attacker-controlled (it is the
 // original upload filename), so escape it for the context it lands in.
-function buildLinks(url, name) {
+function buildLinks(url, name, glb = false) {
+  if (glb) return [{ label: '直链', value: url }];
   const n = name || '';
   return [
     { label: '直链',      value: url },
@@ -261,16 +272,20 @@ function prependResult(data) {
   const origin = window.location.origin;
   const url    = `${origin}/uploads/${data.filename}`;
 
-  const links = buildLinks(url, data.orig_name || data.filename);
+  const glb   = isGlbData(data);
+  const links = buildLinks(url, data.orig_name || data.filename, glb);
+  const preview = glb
+    ? `<div class="glb-placeholder">${GLB_ICON}</div>`
+    : `<img src="/uploads/thumbs/${data.filename}"
+            onerror="this.src='/uploads/${data.filename}'"
+            alt="${escHtml(data.orig_name || data.filename)}" />`;
 
   const item = document.createElement('div');
   item.className = 'result-item';
   item.innerHTML = `
     <div class="result-inner">
       <div class="result-preview">
-        <img src="/uploads/thumbs/${data.filename}"
-             onerror="this.src='/uploads/${data.filename}'"
-             alt="${escHtml(data.orig_name || data.filename)}" />
+        ${preview}
       </div>
       <div class="result-links">
         <div class="result-meta">
@@ -452,20 +467,24 @@ function prependGalleryItem(data) { if (!galleryHas(data.id)) galleryGrid.prepen
 
 function buildGalleryItem(data) {
   const url  = `${window.location.origin}/uploads/${data.filename}`;
+  const glb  = isGlbData(data);
   const item = document.createElement('div');
   item.className = 'gallery-item';
   item.dataset.id = data.id;
+  const preview = glb
+    ? `<div class="glb-placeholder">${GLB_ICON}</div>`
+    : `<img src="/uploads/thumbs/${data.filename}"
+            onerror="this.src='/uploads/${data.filename}'"
+            alt="${escHtml(data.orig_name || data.filename)}" loading="lazy" />`;
   item.innerHTML = `
-    <img src="/uploads/thumbs/${data.filename}"
-         onerror="this.src='/uploads/${data.filename}'"
-         alt="${escHtml(data.orig_name || data.filename)}" loading="lazy" />
+    ${preview}
     <div class="gallery-overlay">
       <span class="gallery-item-name">${escHtml(data.orig_name || data.filename)}</span>
       <button class="btn-move" data-id="${escAttr(data.id)}">移动</button>
       <button class="btn-delete" data-id="${escAttr(data.id)}">删除</button>
     </div>`;
 
-  item.addEventListener('click', () => openLightbox(url, data.orig_name || data.filename));
+  item.addEventListener('click', () => openLightbox(url, data.orig_name || data.filename, glb));
   item.querySelector('.btn-move').addEventListener('click', e => {
     e.stopPropagation();
     openMoveModal(data, item);
@@ -565,12 +584,20 @@ async function confirmDelete(id, itemEl) {
 }
 
 /* ── Lightbox ─────────────────────────────────────────────────────────────── */
-function openLightbox(url, name) {
-  lightboxImg.src = url;
+function openLightbox(url, name, glb = false) {
+  if (glb) {
+    lightboxImg.style.display = 'none';
+    lightboxGlb.innerHTML = GLB_ICON + `<p>${escHtml(name || '')}</p>`;
+    lightboxGlb.style.display = 'flex';
+  } else {
+    lightboxGlb.style.display = 'none';
+    lightboxImg.style.display = '';
+    lightboxImg.src = url;
+  }
   lightbox.style.display = 'flex';
   document.body.style.overflow = 'hidden';
 
-  const links = buildLinks(url, name);
+  const links = buildLinks(url, name, glb);
 
   const linksEl = document.getElementById('lightboxLinks');
   linksEl.innerHTML = links.map(l => `
@@ -588,6 +615,7 @@ function openLightbox(url, name) {
 function closeLightbox() {
   lightbox.style.display = 'none';
   lightboxImg.src = '';
+  lightboxGlb.innerHTML = '';
   document.body.style.overflow = '';
 }
 document.getElementById('lightboxClose').addEventListener('click', closeLightbox);

@@ -6,13 +6,13 @@
 ## 功能
 
 - 拖拽 / 点击 / Ctrl+V 粘贴上传
-- 上传后自动生成直链、BBCode、Markdown、HTML 四种格式，一键复制
+- 上传后自动生成直链、BBCode、Markdown、HTML 四种格式，一键复制（.glb 仅直链）
 - 自动生成缩略图（400×400）
 - 图片画廊，支持大图预览、复制链接、删除
 - HMAC Token 鉴权，密钥保存在本地，Token 有效期 30 天
 - 图片直链公开访问，方便外链分享
 
-支持格式：JPG · PNG · GIF · WebP · BMP · SVG，单文件最大 20MB
+支持格式：JPG · PNG · GIF · WebP · BMP · SVG（最大 20MB）· GLB 3D 模型（最大 100MB）
 
 ## 部署
 
@@ -74,11 +74,13 @@ img.example.com {
 }
 ```
 
+> 若上传 .glb 大文件,请确认反代的请求体上限 ≥ 100MB(Caddy 默认不限制;Nginx 需 client_max_body_size 100m)。
+
 ## 安全建议
 
 - **密码强度**：登录接口未做限流，弱密码可能被在线爆破。请使用足够强的随机密码；如需更稳妥，可在 Caddy 中对 `/api/auth/login` 加 `rate_limit`。
 - **用户内容**：`/uploads/*` 由应用以 `Content-Security-Policy: sandbox` + `X-Content-Type-Options: nosniff` 返回，并带 `Cache-Control: immutable` 长缓存——SVG 中的脚本不会执行，图片可永久缓存。
-- **上传校验**：服务端按真实字节（Pillow）校验图片类型，不信任客户端声明的 `Content-Type`，非图片内容会被拒绝（HTTP 415）且不落盘。
+- **上传校验**：服务端按真实字节（Pillow）校验图片类型，不信任客户端声明的 `Content-Type`，非图片内容会被拒绝（HTTP 415）且不落盘。.glb 按 GLB 魔数与版本号校验。
 - **`.env` 权限**：务必 `chmod 600 .env`，避免同机其他用户读到密码。
 
 ## 目录结构
@@ -102,7 +104,7 @@ img.example.com {
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
 | POST | `/api/auth/login` | — | 密码换 Token |
-| POST | `/api/upload` | ✓ | 上传图片（可指定文件夹） |
+| POST | `/api/upload` | ✓ | 上传图片或 .glb 模型（可指定文件夹） |
 | GET | `/api/images` | ✓ | 图片列表（分页 / 按文件夹筛选） |
 | DELETE | `/api/images/:id` | ✓ | 删除图片 |
 | GET | `/uploads/*` | — | 图片直链 |

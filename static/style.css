@@ -692,3 +692,18 @@ kbd {
   color: var(--text-muted); font-size: .9rem; cursor: pointer;
 }
 .btn-move-cancel:hover { color: var(--text); }
+
+/* ── GLB placeholder ─────────────────────────────────────────────────────── */
+.glb-placeholder {
+  width: 100%; height: 100%; min-height: 90px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface2); color: var(--primary-light);
+}
+.gallery-item .glb-placeholder { aspect-ratio: 1; }
+.lightbox-glb {
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; padding: 60px 80px; background: var(--surface2);
+  border-radius: var(--radius); color: var(--primary-light);
+}
+.lightbox-glb p { color: var(--text-muted); font-size: .9rem; max-width: 320px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
