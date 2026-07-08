@@ -346,6 +346,33 @@ async def list_images(
     }
 
 
+# ── Move image ─────────────────────────────────────────────────────────────────
+class ImageMove(BaseModel):
+    folder_id: str | None = None
+
+
+@app.patch("/api/images/{image_id}", dependencies=[Depends(require_auth)])
+async def move_image(image_id: str, body: ImageMove):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM images WHERE id = ?", (image_id,)
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise HTTPException(status_code=404, detail="图片不存在")
+        if body.folder_id is not None:
+            async with db.execute(
+                "SELECT 1 FROM folders WHERE id = ?", (body.folder_id,)
+            ) as cursor:
+                if not await cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="文件夹不存在")
+        await db.execute(
+            "UPDATE images SET folder_id = ? WHERE id = ?",
+            (body.folder_id, image_id),
+        )
+        await db.commit()
+    return {"ok": True, "folder_id": body.folder_id}
+
+
 # ── Delete ─────────────────────────────────────────────────────────────────────
 @app.delete("/api/images/{image_id}", dependencies=[Depends(require_auth)])
 async def delete_image(image_id: str):

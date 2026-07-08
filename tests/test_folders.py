@@ -177,3 +177,43 @@ def test_list_filter_unknown_folder_is_empty(client, auth, make_png):
     _upload(client, auth, make_png)
     r = client.get("/api/images?folder=doesnotexist", headers=auth).json()
     assert r["total"] == 0 and r["images"] == []
+
+
+# ── Moving images & folder deletion semantics ─────────────────────────────────
+def _move(client, auth, image_id, folder_id):
+    return client.patch(f"/api/images/{image_id}", headers=auth,
+                        json={"folder_id": folder_id})
+
+
+def test_move_image_into_and_out_of_folder(client, auth, make_png):
+    fid = _create_folder(client, auth, "分类B").json()["id"]
+    img = _upload(client, auth, make_png).json()["id"]
+
+    r = _move(client, auth, img, fid)
+    assert r.status_code == 200 and r.json()["folder_id"] == fid
+    assert client.get(f"/api/images?folder={fid}", headers=auth).json()["total"] == 1
+
+    r = _move(client, auth, img, None)
+    assert r.status_code == 200 and r.json()["folder_id"] is None
+    assert client.get("/api/images?folder=none", headers=auth).json()["total"] == 1
+
+
+def test_move_errors(client, auth, make_png):
+    img = _upload(client, auth, make_png).json()["id"]
+    assert _move(client, auth, "nope", None).status_code == 404
+    assert _move(client, auth, img, "nofolder").status_code == 404
+
+
+def test_delete_folder_uncategorizes_images(client, auth, make_png):
+    fid = _create_folder(client, auth, "将删除").json()["id"]
+    img = _upload(client, auth, make_png, folder_id=fid).json()["id"]
+
+    assert client.delete(f"/api/folders/{fid}", headers=auth).status_code == 200
+
+    data = client.get("/api/folders", headers=auth).json()
+    assert data["folders"] == [] and data["uncategorized"] == 1
+    none = client.get("/api/images?folder=none", headers=auth).json()
+    assert [i["id"] for i in none["images"]] == [img]
+    # the image file itself is untouched
+    r = client.get("/api/images", headers=auth).json()
+    assert r["total"] == 1
