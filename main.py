@@ -318,16 +318,25 @@ async def upload(file: UploadFile = File(...), folder_id: str | None = Query(Non
 async def list_images(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
+    folder: str | None = Query(None),
 ):
     offset = (page - 1) * per_page
+    where, params = "", []
+    if folder == "none":
+        where = "WHERE folder_id IS NULL"
+    elif folder:
+        where, params = "WHERE folder_id = ?", [folder]
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM images ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (per_page, offset)
+            f"SELECT * FROM images {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, per_page, offset)
         ) as cursor:
             rows = await cursor.fetchall()
-        async with db.execute("SELECT COUNT(*) FROM images") as cursor:
+        async with db.execute(
+            f"SELECT COUNT(*) FROM images {where}", params
+        ) as cursor:
             row = await cursor.fetchone()
             total = row[0] if row else 0
 

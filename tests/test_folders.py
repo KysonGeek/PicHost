@@ -152,3 +152,28 @@ def test_upload_without_folder_reports_null(client, auth, make_png):
     r = _upload(client, auth, make_png)
     assert r.status_code == 200
     assert r.json()["folder_id"] is None
+
+
+# ── Gallery filtering ─────────────────────────────────────────────────────────
+def test_list_filter_by_folder(client, auth, make_png):
+    fid = _create_folder(client, auth, "分类A").json()["id"]
+    in_folder = _upload(client, auth, make_png, folder_id=fid).json()["id"]
+    loose = _upload(client, auth, make_png).json()["id"]
+
+    all_ = client.get("/api/images", headers=auth).json()
+    assert all_["total"] == 2
+
+    only = client.get(f"/api/images?folder={fid}", headers=auth).json()
+    assert only["total"] == 1
+    assert [i["id"] for i in only["images"]] == [in_folder]
+    assert only["images"][0]["folder_id"] == fid
+
+    none = client.get("/api/images?folder=none", headers=auth).json()
+    assert none["total"] == 1
+    assert [i["id"] for i in none["images"]] == [loose]
+
+
+def test_list_filter_unknown_folder_is_empty(client, auth, make_png):
+    _upload(client, auth, make_png)
+    r = client.get("/api/images?folder=doesnotexist", headers=auth).json()
+    assert r["total"] == 0 and r["images"] == []
