@@ -110,9 +110,24 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS folders (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+        """)
+        # Idempotent migration: pre-folder DBs lack images.folder_id.
+        async with db.execute("PRAGMA table_info(images)") as cursor:
+            cols = [row[1] for row in await cursor.fetchall()]
+        if "folder_id" not in cols:
+            await db.execute("ALTER TABLE images ADD COLUMN folder_id TEXT")
         # Gallery lists ORDER BY created_at DESC; index it to avoid full sorts.
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_created_at ON images(created_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_folder_id ON images(folder_id)"
         )
         await db.commit()
 
@@ -185,9 +200,11 @@ async def upload(file: UploadFile = File(...)):
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
-                "INSERT INTO images VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO images "
+                "(id, filename, orig_name, size, width, height, mime_type, created_at, folder_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (file_id, filename, file.filename or filename,
-                 len(content), meta["width"], meta["height"], meta["mime"], created_at)
+                 len(content), meta["width"], meta["height"], meta["mime"], created_at, None)
             )
             await db.commit()
     except Exception:
