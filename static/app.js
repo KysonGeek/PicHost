@@ -596,6 +596,7 @@ let dialogResolve = null;   // pending promise resolver; null = no dialog open
 let dialogMode = null;      // 'input' | 'confirm'
 
 function openDialog({ title, message = '', input = false, value = '', confirmText = '确定', danger = false }) {
+  cancelDialog();  // settle any dialog already open so its promise never leaks
   dialogTitle.textContent = title;
   dialogMessage.textContent = message;   // user-controlled text stays textContent
   dialogMessage.style.display = message ? '' : 'none';
@@ -607,6 +608,7 @@ function openDialog({ title, message = '', input = false, value = '', confirmTex
   dialogMode = input ? 'input' : 'confirm';
   dialogOverlay.classList.remove('hidden');
   if (input) { dialogInput.focus(); dialogInput.select(); }
+  else if (danger) dialogCancel.focus();  // never default-focus a destructive action
   else dialogConfirm.focus();
   return new Promise(resolve => { dialogResolve = resolve; });
 }
