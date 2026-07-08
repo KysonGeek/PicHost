@@ -17,6 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, field_validator
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pillow_heif import register_heif_opener
+
+# Let Pillow decode Apple's HEIC/HEIF; uploads are transcoded to JPEG.
+register_heif_opener()
 
 BASE_DIR = Path(__file__).parent
 UPLOAD_DIR = Path(os.environ.get("PICHOST_UPLOAD_DIR", BASE_DIR / "uploads"))
@@ -31,9 +35,10 @@ THUMB_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_MIME = {
     "image/jpeg", "image/png", "image/gif",
     "image/webp", "image/bmp", "image/svg+xml",
+    "image/heic", "image/heif",
     "model/gltf-binary",
 }
-ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".glb"}
+ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".glb", ".heic", ".heif"}
 MAX_SIZE = 20 * 1024 * 1024  # 20 MB (compressed upload cap)
 MAX_GLB_SIZE = 100 * 1024 * 1024  # 100 MB cap for .glb models (images stay at MAX_SIZE)
 MAX_PIXELS = 50_000_000      # decoded-pixel cap (decompression-bomb / pixel-flood guard)
@@ -271,13 +276,15 @@ async def delete_folder(folder_id: str):
 @app.post("/api/upload", dependencies=[Depends(require_auth)])
 async def upload(file: UploadFile = File(...), folder_id: str | None = Query(None)):
     name_lower = (file.filename or "").lower()
-    # Browsers commonly report .glb as application/octet-stream or nothing at
-    # all, so fall back to the extension for those; real validation is by bytes.
+    # Browsers/OSes often report .glb and .heic as application/octet-stream
+    # (or nothing); fall back to the extension for those. Real validation is
+    # always by bytes.
+    generic_type = file.content_type in (None, "", "application/octet-stream")
     is_glb = file.content_type == "model/gltf-binary" or (
-        name_lower.endswith(".glb")
-        and file.content_type in (None, "", "application/octet-stream")
+        name_lower.endswith(".glb") and generic_type
     )
-    if not is_glb and file.content_type not in ALLOWED_MIME:
+    ext_sniffable = name_lower.endswith((".heic", ".heif")) and generic_type
+    if not is_glb and not ext_sniffable and file.content_type not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"不支持的文件类型: {file.content_type}")
 
     if folder_id:
@@ -490,7 +497,27 @@ def _process_upload(content: bytes, is_svg: bool, is_glb: bool, file_id: str) ->
 
     try:
         with Image.open(io.BytesIO(content)) as src:
-            mime = PIL_FORMAT_TO_MIME.get((src.format or "").upper())
+            fmt = (src.format or "").upper()
+            if fmt == "HEIF":
+                # Apple photos: transcode to JPEG so links render in every
+                # browser. Orientation is baked into pixels and no EXIF is
+                # written — GPS/device metadata must not leak via public URLs.
+                w0, h0 = src.size
+                if w0 * h0 > MAX_PIXELS:
+                    raise _UploadRejected("图片像素数超过限制")
+                img = ImageOps.exif_transpose(src) or src
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                width, height = img.size
+                filename = f"{file_id}.jpg"
+                img.save(UPLOAD_DIR / filename, "JPEG", quality=92, optimize=True)
+                try:
+                    _make_thumbnail(img, THUMB_DIR / filename)
+                except Exception:
+                    pass
+                return {"filename": filename, "width": width, "height": height,
+                        "mime": "image/jpeg"}
+            mime = PIL_FORMAT_TO_MIME.get(fmt)
             if mime is None:
                 raise _UploadRejected(f"不支持的图片格式: {src.format or 'unknown'}")
             w0, h0 = src.size

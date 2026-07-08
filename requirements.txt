@@ -1,5 +1,6 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.30
-Pillow==12.2.0
+Pillow==12.3.0
 aiosqlite==0.20.0
+pillow-heif==1.4.0
