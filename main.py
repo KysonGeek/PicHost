@@ -537,7 +537,7 @@ def _process_upload(content: bytes, is_svg: bool, is_glb: bool, file_id: str) ->
                 pass
     except _UploadRejected:
         raise
-    except (UnidentifiedImageError, OSError, ValueError) as e:
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError) as e:
         raise _UploadRejected("无法解析为图片") from e
 
     return {"filename": filename, "width": width, "height": height, "mime": mime}

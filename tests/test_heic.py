@@ -11,7 +11,7 @@ def make_heic():
     from pillow_heif import register_heif_opener
     register_heif_opener()
 
-    def _make(width=32, height=16, orientation=None, tagged=False):
+    def _make(width=32, height=16, orientation=None, tagged=False, gps=False):
         img = Image.new("RGB", (width, height), (10, 200, 30))
         exif = img.getexif()
         if orientation:
@@ -19,8 +19,14 @@ def make_heic():
         if tagged:
             exif[0x010F] = "Apple"               # Make
             exif[0x0132] = "2026:07:09 10:00:00" # DateTime
+        if gps:
+            from PIL.ExifTags import IFD
+            from PIL.TiffImagePlugin import IFDRational
+            gps_ifd = exif.get_ifd(IFD.GPSInfo)
+            gps_ifd[1] = "N"                      # GPSLatitudeRef
+            gps_ifd[2] = (IFDRational(31, 1), IFDRational(13, 1), IFDRational(0, 1))  # GPSLatitude 31°13'
         buf = io.BytesIO()
-        img.save(buf, format="HEIF", exif=exif.tobytes() if (orientation or tagged) else None)
+        img.save(buf, format="HEIF", exif=exif.tobytes() if (orientation or tagged or gps) else None)
         return buf.getvalue()
     return _make
 
@@ -68,11 +74,16 @@ def test_heic_orientation_baked_in(client, auth, make_heic):
 
 
 def test_heic_metadata_stripped(client, auth, make_heic, mainmod):
-    r = _upload_heic(client, auth, make_heic(tagged=True))
+    r = _upload_heic(client, auth, make_heic(tagged=True, gps=True))
     assert r.status_code == 200
     stored = mainmod.UPLOAD_DIR / r.json()["filename"]
     with Image.open(stored) as out:
-        assert dict(out.getexif()) == {}
+        exif = out.getexif()
+        assert dict(exif) == {}
+        from PIL.ExifTags import IFD
+        assert dict(exif.get_ifd(IFD.GPSInfo)) == {}
+    raw = stored.read_bytes()
+    assert b"Apple" not in raw
 
 
 def test_fake_heic_bytes_rejected(client, auth, mainmod):
@@ -82,6 +93,15 @@ def test_fake_heic_bytes_rejected(client, auth, mainmod):
     conn = sqlite3.connect(mainmod.DB_PATH)
     assert conn.execute("SELECT COUNT(*) FROM images").fetchone()[0] == 0
     conn.close()
+    assert not [p for p in mainmod.UPLOAD_DIR.glob("*") if p.is_file()]
+
+
+def test_oversized_heic_rejected_before_write(client, auth, make_heic, mainmod, monkeypatch):
+    monkeypatch.setattr(mainmod, "MAX_PIXELS", 100)  # 32x16 = 512 > 100
+    r = _upload_heic(client, auth, make_heic())
+    assert r.status_code == 415
+    assert not list(mainmod.UPLOAD_DIR.glob("*.jpg"))
+    assert not list(mainmod.THUMB_DIR.glob("*.jpg"))
 
 
 def test_heic_joins_folders(client, auth, make_heic):
