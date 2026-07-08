@@ -129,6 +129,12 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_folder_id ON images(folder_id)"
         )
+        # Heal any folder_id left dangling by historical races: images must
+        # never point at a folder row that no longer exists.
+        await db.execute(
+            "UPDATE images SET folder_id = NULL "
+            "WHERE folder_id IS NOT NULL AND folder_id NOT IN (SELECT id FROM folders)"
+        )
         await db.commit()
 
 
@@ -292,6 +298,16 @@ async def upload(file: UploadFile = File(...), folder_id: str | None = Query(Non
     created_at = datetime.now(timezone.utc).isoformat()
     try:
         async with aiosqlite.connect(DB_PATH) as db:
+            # Re-validate inside the same connection as the INSERT: the folder
+            # may have been deleted while we were processing the image bytes.
+            # Files are already written, so fall back to uncategorized instead
+            # of erroring, rather than persist a dangling folder_id.
+            if folder_id:
+                async with db.execute(
+                    "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+                ) as cursor:
+                    if not await cursor.fetchone():
+                        folder_id = None
             await db.execute(
                 "INSERT INTO images "
                 "(id, filename, orig_name, size, width, height, mime_type, created_at, folder_id) "

@@ -34,6 +34,7 @@ let toastTimer = null;
 let folders = [];        // [{id, name, created_at, count}]
 let uncatCount = 0;
 let currentFilter = 'all';  // 'all' | 'none' | <folderId>
+let galleryReq = 0;
 
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;  // keep in sync with backend MAX_SIZE
 const ALLOWED_UPLOAD_TYPES = new Set([
@@ -365,7 +366,7 @@ async function createFolder() {
     loadFolders();
   } else {
     const err = await res.json().catch(() => ({}));
-    showToast(err.detail || '创建失败', 'error');
+    showToast(typeof err.detail === 'string' ? err.detail : '文件夹名称需为 1-50 个字符', 'error');
   }
 }
 
@@ -385,7 +386,7 @@ async function renameFolder(id) {
     loadFolders();
   } else {
     const err = await res.json().catch(() => ({}));
-    showToast(err.detail || '重命名失败', 'error');
+    showToast(typeof err.detail === 'string' ? err.detail : '文件夹名称需为 1-50 个字符', 'error');
   }
 }
 
@@ -401,18 +402,20 @@ async function removeFolder(id) {
     refreshAll();
   } else {
     const err = await res.json().catch(() => ({}));
-    showToast(err.detail || '删除失败', 'error');
+    showToast(typeof err.detail === 'string' ? err.detail : '删除失败', 'error');
   }
 }
 
 /* ── Gallery ──────────────────────────────────────────────────────────────── */
 async function loadGallery(page = 1, append = false) {
+  const seq = ++galleryReq;
   const folderQ = currentFilter === 'all' ? '' : `&folder=${encodeURIComponent(currentFilter)}`;
   const res = await authFetch(`/api/images?page=${page}&per_page=${PER_PAGE}${folderQ}`);
-  if (!res) return;
+  if (!res || seq !== galleryReq) return;
 
   try {
     const data = await res.json();
+    if (seq !== galleryReq) return;
     galleryTotal = data.total;
     updateGalleryCount();
 
@@ -526,7 +529,7 @@ moveList.addEventListener('click', async e => {
     showToast('已移动', 'success');
   } else {
     const err = await res.json().catch(() => ({}));
-    showToast(err.detail || '移动失败', 'error');
+    showToast(typeof err.detail === 'string' ? err.detail : '移动失败', 'error');
   }
 });
 

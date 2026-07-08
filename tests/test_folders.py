@@ -217,3 +217,19 @@ def test_delete_folder_uncategorizes_images(client, auth, make_png):
     # the image file itself is untouched
     r = client.get("/api/images", headers=auth).json()
     assert r["total"] == 1
+
+
+def test_init_db_heals_dangling_folder_id(client, auth, make_png, mainmod):
+    import asyncio
+    img = _upload(client, auth, make_png).json()["id"]
+    conn = sqlite3.connect(mainmod.DB_PATH)
+    conn.execute("UPDATE images SET folder_id = 'ghost' WHERE id = ?", (img,))
+    conn.commit()
+    conn.close()
+
+    asyncio.run(mainmod.init_db())
+
+    conn = sqlite3.connect(mainmod.DB_PATH)
+    row = conn.execute("SELECT folder_id FROM images WHERE id = ?", (img,)).fetchone()
+    conn.close()
+    assert row[0] is None
