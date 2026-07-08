@@ -400,7 +400,8 @@ async function removeFolder(id) {
     if (currentFilter === id) currentFilter = 'all';
     refreshAll();
   } else {
-    showToast('删除失败', 'error');
+    const err = await res.json().catch(() => ({}));
+    showToast(err.detail || '删除失败', 'error');
   }
 }
 
@@ -499,13 +500,13 @@ moveList.addEventListener('click', async e => {
   const btn = e.target.closest('button[data-folder]');
   if (!btn || !movingImage) return;
   const target = btn.dataset.folder || null;
-  const { id, itemEl, data } = movingImage;  // extract before closeMoveModal() nulls it
+  const { id, itemEl, data } = movingImage;
+  closeMoveModal();  // synchronously null movingImage: re-entrant clicks bail on the null check above
   const res = await authFetch(`/api/images/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ folder_id: target }),
   });
-  closeMoveModal();
   if (!res) return;
   if (res.ok) {
     data.folder_id = target;  // keep the cached item in sync for the next move
