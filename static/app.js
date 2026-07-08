@@ -37,9 +37,12 @@ let currentFilter = 'all';  // 'all' | 'none' | <folderId>
 let galleryReq = 0;
 
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;  // keep in sync with backend MAX_SIZE
+const MAX_GLB_UPLOAD_SIZE = 100 * 1024 * 1024;  // keep in sync with backend MAX_GLB_SIZE
 const ALLOWED_UPLOAD_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml', 'model/gltf-binary',
 ]);
+
+function isGlbFile(file) { return (file.name || '').toLowerCase().endsWith('.glb'); }
 
 // In-flight uploads keyed by a sequence id, for aggregate progress display.
 const inflightUploads = new Map();
@@ -122,7 +125,7 @@ uploadZone.addEventListener('dragleave', e => {
 uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.classList.remove('dragging');
-  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
+  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/') || isGlbFile(f));
   if (files.length) uploadFiles(files);
 });
 
@@ -135,9 +138,10 @@ document.addEventListener('paste', e => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
   const files = [...items]
-    .filter(i => i.kind === 'file' && i.type.startsWith('image/'))
+    .filter(i => i.kind === 'file')
     .map(i => i.getAsFile())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter(f => f.type.startsWith('image/') || isGlbFile(f));
   if (files.length) {
     uploadFiles(files);
     showToast('已检测到粘贴的图片，正在上传…');
@@ -166,11 +170,13 @@ function renderUploadProgress() {
 }
 
 function uploadSingle(file) {
-  if (file.size > MAX_UPLOAD_SIZE) {
-    showToast(`${file.name || '文件'} 超过 20MB 限制`, 'error');
+  const glb = isGlbFile(file) || file.type === 'model/gltf-binary';
+  const sizeCap = glb ? MAX_GLB_UPLOAD_SIZE : MAX_UPLOAD_SIZE;
+  if (file.size > sizeCap) {
+    showToast(`${file.name || '文件'} 超过 ${glb ? '100MB' : '20MB'} 限制`, 'error');
     return;
   }
-  if (file.type && !ALLOWED_UPLOAD_TYPES.has(file.type)) {
+  if (!glb && file.type && !ALLOWED_UPLOAD_TYPES.has(file.type)) {
     showToast(`不支持的文件类型：${file.type}`, 'error');
     return;
   }
