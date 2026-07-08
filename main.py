@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 BASE_DIR = Path(__file__).parent
@@ -169,11 +169,94 @@ async def index():
 class LoginRequest(BaseModel):
     password: str
 
+class FolderName(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 50:
+            raise ValueError("文件夹名称需为 1-50 个字符")
+        return v
+
 @app.post("/api/auth/login")
 async def login(body: LoginRequest):
     if not hmac.compare_digest(body.password, PASSWORD):
         raise HTTPException(status_code=401, detail="密码错误")
     return {"token": make_token()}
+
+
+# ── Folders ────────────────────────────────────────────────────────────────────
+@app.get("/api/folders", dependencies=[Depends(require_auth)])
+async def list_folders():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT f.id, f.name, f.created_at, COUNT(i.id) AS count
+            FROM folders f LEFT JOIN images i ON i.folder_id = f.id
+            GROUP BY f.id ORDER BY f.created_at ASC
+        """) as cursor:
+            folders = [dict(r) for r in await cursor.fetchall()]
+        async with db.execute(
+            "SELECT COUNT(*) FROM images WHERE folder_id IS NULL"
+        ) as cursor:
+            row = await cursor.fetchone()
+            uncategorized = row[0] if row else 0
+    return {"folders": folders, "uncategorized": uncategorized}
+
+
+@app.post("/api/folders", status_code=201, dependencies=[Depends(require_auth)])
+async def create_folder(body: FolderName):
+    folder_id = uuid.uuid4().hex[:12]
+    created_at = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "INSERT INTO folders (id, name, created_at) VALUES (?,?,?)",
+                (folder_id, body.name, created_at),
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            raise HTTPException(status_code=409, detail="同名文件夹已存在")
+    return {"id": folder_id, "name": body.name, "created_at": created_at}
+
+
+@app.patch("/api/folders/{folder_id}", dependencies=[Depends(require_auth)])
+async def rename_folder(folder_id: str, body: FolderName):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM folders WHERE id = ?", (folder_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="文件夹不存在")
+        try:
+            await db.execute(
+                "UPDATE folders SET name = ? WHERE id = ?", (body.name, folder_id)
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            raise HTTPException(status_code=409, detail="同名文件夹已存在")
+    return {"id": folder_id, "name": body.name, "created_at": row["created_at"]}
+
+
+@app.delete("/api/folders/{folder_id}", dependencies=[Depends(require_auth)])
+async def delete_folder(folder_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise HTTPException(status_code=404, detail="文件夹不存在")
+        # Non-destructive: images fall back to uncategorized, same transaction.
+        await db.execute(
+            "UPDATE images SET folder_id = NULL WHERE folder_id = ?", (folder_id,)
+        )
+        await db.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        await db.commit()
+    return {"ok": True}
 
 
 # ── Upload ─────────────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 """Folder feature: schema migration, CRUD, upload-to-folder, filtering, moving."""
 import asyncio
 import sqlite3
+import pytest
 
 
 def _columns(db_path, table):
@@ -56,3 +57,65 @@ def test_upload_default_folder_is_null(client, auth, make_png, mainmod):
                        (r.json()["id"],)).fetchone()
     conn.close()
     assert row[0] is None
+
+
+# ── Folder CRUD ───────────────────────────────────────────────────────────────
+def _create_folder(client, auth, name):
+    return client.post("/api/folders", headers=auth, json={"name": name})
+
+
+def test_folder_create_and_list(client, auth):
+    r = _create_folder(client, auth, "旅行")
+    assert r.status_code == 201
+    body = r.json()
+    assert body["name"] == "旅行" and body["id"]
+
+    r = client.get("/api/folders", headers=auth)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["uncategorized"] == 0
+    assert [f["name"] for f in data["folders"]] == ["旅行"]
+    assert data["folders"][0]["count"] == 0
+
+
+def test_folder_name_is_trimmed(client, auth):
+    r = _create_folder(client, auth, "  截图  ")
+    assert r.status_code == 201
+    assert r.json()["name"] == "截图"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "x" * 51])
+def test_folder_invalid_name_rejected(client, auth, bad):
+    assert _create_folder(client, auth, bad).status_code == 422
+
+
+def test_folder_duplicate_name_conflict(client, auth):
+    assert _create_folder(client, auth, "旅行").status_code == 201
+    assert _create_folder(client, auth, "旅行").status_code == 409
+
+
+def test_folder_rename(client, auth):
+    fid = _create_folder(client, auth, "旧名").json()["id"]
+    r = client.patch(f"/api/folders/{fid}", headers=auth, json={"name": "新名"})
+    assert r.status_code == 200 and r.json()["name"] == "新名"
+
+
+def test_folder_rename_conflict_and_missing(client, auth):
+    _create_folder(client, auth, "甲")
+    fid = _create_folder(client, auth, "乙").json()["id"]
+    assert client.patch(f"/api/folders/{fid}", headers=auth,
+                        json={"name": "甲"}).status_code == 409
+    assert client.patch("/api/folders/nope", headers=auth,
+                        json={"name": "丙"}).status_code == 404
+
+
+def test_folder_delete(client, auth):
+    fid = _create_folder(client, auth, "临时").json()["id"]
+    assert client.delete(f"/api/folders/{fid}", headers=auth).status_code == 200
+    assert client.delete(f"/api/folders/{fid}", headers=auth).status_code == 404
+    assert client.get("/api/folders", headers=auth).json()["folders"] == []
+
+
+def test_folders_require_auth(client):
+    assert client.get("/api/folders").status_code == 401
+    assert client.post("/api/folders", json={"name": "x"}).status_code == 401
