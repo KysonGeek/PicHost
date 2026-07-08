@@ -102,7 +102,12 @@ img.example.com {
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
 | POST | `/api/auth/login` | — | 密码换 Token |
-| POST | `/api/upload` | ✓ | 上传图片 |
-| GET | `/api/images` | ✓ | 图片列表（分页） |
+| POST | `/api/upload` | ✓ | 上传图片（可指定文件夹） |
+| GET | `/api/images` | ✓ | 图片列表（分页 / 按文件夹筛选） |
 | DELETE | `/api/images/:id` | ✓ | 删除图片 |
 | GET | `/uploads/*` | — | 图片直链 |
+| GET | `/api/folders` | ✓ | 文件夹列表（含图片数） |
+| POST | `/api/folders` | ✓ | 新建文件夹 |
+| PATCH | `/api/folders/:id` | ✓ | 重命名文件夹 |
+| DELETE | `/api/folders/:id` | ✓ | 删除文件夹（图片回到未分类） |
+| PATCH | `/api/images/:id` | ✓ | 移动图片到文件夹 |

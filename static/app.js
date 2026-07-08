@@ -351,10 +351,58 @@ folderBar.addEventListener('click', e => {
   }
 });
 
-// Implemented in Task 7; placeholder stubs here to avoid runtime errors.
-function createFolder() {}
-function renameFolder(id) {}
-function removeFolder(id) {}
+async function createFolder() {
+  const name = (prompt('新文件夹名称:') || '').trim();
+  if (!name) return;
+  const res = await authFetch('/api/folders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res) return;
+  if (res.ok || res.status === 201) {
+    showToast('文件夹已创建', 'success');
+    loadFolders();
+  } else {
+    const err = await res.json().catch(() => ({}));
+    showToast(err.detail || '创建失败', 'error');
+  }
+}
+
+async function renameFolder(id) {
+  const cur = folders.find(f => f.id === id);
+  if (!cur) return;
+  const name = (prompt('重命名文件夹:', cur.name) || '').trim();
+  if (!name || name === cur.name) return;
+  const res = await authFetch(`/api/folders/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res) return;
+  if (res.ok) {
+    showToast('已重命名', 'success');
+    loadFolders();
+  } else {
+    const err = await res.json().catch(() => ({}));
+    showToast(err.detail || '重命名失败', 'error');
+  }
+}
+
+async function removeFolder(id) {
+  const cur = folders.find(f => f.id === id);
+  if (!cur) return;
+  if (!confirm(`删除文件夹「${cur.name}」？其中的图片将回到「未分类」。`)) return;
+  const res = await authFetch(`/api/folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res) return;
+  if (res.ok) {
+    showToast('文件夹已删除', 'success');
+    if (currentFilter === id) currentFilter = 'all';
+    refreshAll();
+  } else {
+    showToast('删除失败', 'error');
+  }
+}
 
 /* ── Gallery ──────────────────────────────────────────────────────────────── */
 async function loadGallery(page = 1, append = false) {
@@ -403,10 +451,15 @@ function buildGalleryItem(data) {
          alt="${escHtml(data.orig_name || data.filename)}" loading="lazy" />
     <div class="gallery-overlay">
       <span class="gallery-item-name">${escHtml(data.orig_name || data.filename)}</span>
+      <button class="btn-move" data-id="${escAttr(data.id)}">移动</button>
       <button class="btn-delete" data-id="${escAttr(data.id)}">删除</button>
     </div>`;
 
   item.addEventListener('click', () => openLightbox(url, data.orig_name || data.filename));
+  item.querySelector('.btn-move').addEventListener('click', e => {
+    e.stopPropagation();
+    openMoveModal(data, item);
+  });
   item.querySelector('.btn-delete').addEventListener('click', e => {
     e.stopPropagation();
     confirmDelete(data.id, item);
@@ -422,6 +475,62 @@ loadMoreBtn.addEventListener('click', () => {
   galleryPage++;
   loadGallery(galleryPage, true);
 });
+
+/* ── Move image ───────────────────────────────────────────────────────────── */
+let movingImage = null;  // {id, folderId, itemEl, data}
+
+function openMoveModal(data, itemEl) {
+  movingImage = { id: data.id, folderId: data.folder_id || '', itemEl, data };
+  const options = [{ id: '', name: '未分类' }, ...folders];
+  moveList.innerHTML = options.map(f => `
+    <button data-folder="${escAttr(f.id)}"
+            ${f.id === movingImage.folderId ? 'disabled' : ''}>
+      <span>${escHtml(f.name)}</span>${f.id === movingImage.folderId ? '<span>当前</span>' : ''}
+    </button>`).join('');
+  moveOverlay.classList.remove('hidden');
+}
+
+function closeMoveModal() {
+  moveOverlay.classList.add('hidden');
+  movingImage = null;
+}
+
+moveList.addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-folder]');
+  if (!btn || !movingImage) return;
+  const target = btn.dataset.folder || null;
+  const { id, itemEl, data } = movingImage;  // extract before closeMoveModal() nulls it
+  const res = await authFetch(`/api/images/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ folder_id: target }),
+  });
+  closeMoveModal();
+  if (!res) return;
+  if (res.ok) {
+    data.folder_id = target;  // keep the cached item in sync for the next move
+    const stillVisible = currentFilter === 'all'
+      || (currentFilter === 'none' && !target)
+      || currentFilter === target;
+    if (!stillVisible) {
+      itemEl.remove();
+      galleryTotal = Math.max(0, galleryTotal - 1);
+      updateGalleryCount();
+      if (galleryGrid.querySelectorAll('.gallery-item').length === 0) {
+        galleryGrid.appendChild(galleryEmpty);
+        galleryEmpty.style.display = 'flex';
+      }
+    }
+    loadFolders();
+    showToast('已移动', 'success');
+  } else {
+    const err = await res.json().catch(() => ({}));
+    showToast(err.detail || '移动失败', 'error');
+  }
+});
+
+moveCancel.addEventListener('click', closeMoveModal);
+moveOverlay.addEventListener('click', e => { if (e.target === moveOverlay) closeMoveModal(); });
 
 /* ── Delete ───────────────────────────────────────────────────────────────── */
 async function confirmDelete(id, itemEl) {
@@ -473,7 +582,9 @@ function closeLightbox() {
 }
 document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
 document.getElementById('lightboxBackdrop').addEventListener('click', closeLightbox);
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeLightbox(); closeMoveModal(); }
+});
 
 /* ── Copy helper ──────────────────────────────────────────────────────────── */
 function copyText(text, btn) {
