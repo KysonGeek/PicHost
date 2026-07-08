@@ -46,6 +46,14 @@
           <p class="upload-hint-sub">支持 JPG · PNG · GIF · WebP · BMP · SVG &nbsp;|&nbsp; 最大 20MB</p>
         </div>
 
+        <!-- Target folder -->
+        <div class="upload-folder-row">
+          <label for="uploadFolder">上传到</label>
+          <select id="uploadFolder" class="folder-select">
+            <option value="">未分类</option>
+          </select>
+        </div>
+
         <!-- Progress -->
         <div class="progress-wrap" id="progressWrap" style="display:none">
           <div class="progress-bar" id="progressBar"></div>
@@ -63,6 +71,7 @@
         <h2 class="section-title">最近上传</h2>
         <span class="gallery-count" id="galleryCount"></span>
       </div>
+      <div class="folder-bar" id="folderBar"></div>
       <div class="gallery-grid" id="galleryGrid">
         <div class="gallery-empty" id="galleryEmpty">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
@@ -93,6 +102,15 @@
         </svg>
       </button>
       <div class="lightbox-links" id="lightboxLinks"></div>
+    </div>
+  </div>
+
+  <!-- Move-to-folder modal -->
+  <div class="move-overlay hidden" id="moveOverlay">
+    <div class="move-card">
+      <h3 class="move-title">移动到文件夹</h3>
+      <div class="move-list" id="moveList"></div>
+      <button class="btn-move-cancel" id="moveCancel">取消</button>
     </div>
   </div>
 

@@ -43,6 +43,7 @@ def _clean_state():
     try:
         conn = sqlite3.connect(main.DB_PATH)
         conn.execute("DELETE FROM images")
+        conn.execute("DELETE FROM folders")
         conn.commit()
         conn.close()
     except Exception:

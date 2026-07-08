@@ -327,7 +327,7 @@ kbd {
   transition: opacity .2s;
 }
 .gallery-item:hover .gallery-overlay { opacity: 1; }
-.btn-delete {
+.btn-move, .btn-delete {
   background: var(--danger);
   color: #fff;
   border: none;
@@ -339,6 +339,8 @@ kbd {
   transition: background .2s;
 }
 .btn-delete:hover { background: #dc2626; }
+.btn-move { background: var(--primary); }
+.btn-move:hover { background: var(--primary-dark); }
 .gallery-item-name {
   font-size: .68rem;
   color: rgba(255,255,255,.85);
@@ -619,3 +621,74 @@ kbd {
   .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .upload-zone { padding: 36px 16px; }
 }
+
+/* ── Folders ─────────────────────────────────────────────────────────────── */
+.upload-folder-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 14px; justify-content: center;
+}
+.upload-folder-row label { color: var(--text-muted); font-size: .9rem; }
+.folder-select {
+  padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: .9rem;
+  max-width: 220px;
+}
+.folder-select:focus { outline: none; border-color: var(--primary); }
+
+.folder-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-bottom: 18px;
+}
+.folder-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); color: var(--text); font-size: .85rem;
+  cursor: pointer; transition: all .15s;
+}
+.folder-chip:hover { border-color: var(--primary-light); color: var(--primary); }
+.folder-chip.active {
+  background: var(--primary); border-color: var(--primary); color: #fff;
+}
+.folder-chip-count {
+  font-size: .75rem; opacity: .75;
+  background: rgba(0,0,0,.08); border-radius: 999px; padding: 1px 7px;
+}
+.folder-chip.active .folder-chip-count { background: rgba(255,255,255,.22); }
+.folder-chip-new { border-style: dashed; color: var(--text-muted); }
+.chip-actions { display: inline-flex; gap: 6px; margin-left: 2px; }
+.chip-btn {
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface2); color: var(--text-muted); font-size: .78rem;
+  cursor: pointer;
+}
+.chip-btn:hover { color: var(--primary); border-color: var(--primary-light); }
+.chip-btn-danger:hover { color: var(--danger); border-color: var(--danger); }
+
+.move-overlay {
+  position: fixed; inset: 0; z-index: 1200;
+  background: rgba(15,23,42,.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.move-overlay.hidden { display: none; }
+.move-card {
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 24px; width: min(92vw, 360px);
+}
+.move-title { font-size: 1.05rem; margin-bottom: 14px; }
+.move-list { display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow-y: auto; }
+.move-list button {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface2); color: var(--text); font-size: .9rem;
+  cursor: pointer; text-align: left;
+}
+.move-list button:hover { border-color: var(--primary); color: var(--primary); }
+.move-list button:disabled {
+  opacity: .5; cursor: default; border-color: var(--border); color: var(--text-muted);
+}
+.btn-move-cancel {
+  margin-top: 14px; width: 100%; padding: 9px;
+  border: none; border-radius: 10px; background: var(--surface2);
+  color: var(--text-muted); font-size: .9rem; cursor: pointer;
+}
+.btn-move-cancel:hover { color: var(--text); }

@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 BASE_DIR = Path(__file__).parent
@@ -110,9 +110,30 @@ async def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS folders (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+        """)
+        # Idempotent migration: pre-folder DBs lack images.folder_id.
+        async with db.execute("PRAGMA table_info(images)") as cursor:
+            cols = [row[1] for row in await cursor.fetchall()]
+        if "folder_id" not in cols:
+            await db.execute("ALTER TABLE images ADD COLUMN folder_id TEXT")
         # Gallery lists ORDER BY created_at DESC; index it to avoid full sorts.
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_images_created_at ON images(created_at DESC)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_images_folder_id ON images(folder_id)"
+        )
+        # Heal any folder_id left dangling by historical races: images must
+        # never point at a folder row that no longer exists.
+        await db.execute(
+            "UPDATE images SET folder_id = NULL "
+            "WHERE folder_id IS NOT NULL AND folder_id NOT IN (SELECT id FROM folders)"
         )
         await db.commit()
 
@@ -154,6 +175,17 @@ async def index():
 class LoginRequest(BaseModel):
     password: str
 
+class FolderName(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 50:
+            raise ValueError("文件夹名称需为 1-50 个字符")
+        return v
+
 @app.post("/api/auth/login")
 async def login(body: LoginRequest):
     if not hmac.compare_digest(body.password, PASSWORD):
@@ -161,11 +193,93 @@ async def login(body: LoginRequest):
     return {"token": make_token()}
 
 
+# ── Folders ────────────────────────────────────────────────────────────────────
+@app.get("/api/folders", dependencies=[Depends(require_auth)])
+async def list_folders():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT f.id, f.name, f.created_at, COUNT(i.id) AS count
+            FROM folders f LEFT JOIN images i ON i.folder_id = f.id
+            GROUP BY f.id ORDER BY f.created_at ASC
+        """) as cursor:
+            folders = [dict(r) for r in await cursor.fetchall()]
+        async with db.execute(
+            "SELECT COUNT(*) FROM images WHERE folder_id IS NULL"
+        ) as cursor:
+            row = await cursor.fetchone()
+            uncategorized = row[0] if row else 0
+    return {"folders": folders, "uncategorized": uncategorized}
+
+
+@app.post("/api/folders", status_code=201, dependencies=[Depends(require_auth)])
+async def create_folder(body: FolderName):
+    folder_id = uuid.uuid4().hex[:12]
+    created_at = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute(
+                "INSERT INTO folders (id, name, created_at) VALUES (?,?,?)",
+                (folder_id, body.name, created_at),
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            raise HTTPException(status_code=409, detail="同名文件夹已存在")
+    return {"id": folder_id, "name": body.name, "created_at": created_at}
+
+
+@app.patch("/api/folders/{folder_id}", dependencies=[Depends(require_auth)])
+async def rename_folder(folder_id: str, body: FolderName):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM folders WHERE id = ?", (folder_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="文件夹不存在")
+        try:
+            await db.execute(
+                "UPDATE folders SET name = ? WHERE id = ?", (body.name, folder_id)
+            )
+            await db.commit()
+        except aiosqlite.IntegrityError:
+            raise HTTPException(status_code=409, detail="同名文件夹已存在")
+    return {"id": folder_id, "name": body.name, "created_at": row["created_at"]}
+
+
+@app.delete("/api/folders/{folder_id}", dependencies=[Depends(require_auth)])
+async def delete_folder(folder_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise HTTPException(status_code=404, detail="文件夹不存在")
+        # Non-destructive: images fall back to uncategorized, same transaction.
+        await db.execute(
+            "UPDATE images SET folder_id = NULL WHERE folder_id = ?", (folder_id,)
+        )
+        await db.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
+        await db.commit()
+    return {"ok": True}
+
+
 # ── Upload ─────────────────────────────────────────────────────────────────────
 @app.post("/api/upload", dependencies=[Depends(require_auth)])
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), folder_id: str | None = Query(None)):
     if file.content_type not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"不支持的文件类型: {file.content_type}")
+
+    if folder_id:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+            ) as cursor:
+                if not await cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="文件夹不存在")
+    else:
+        folder_id = None  # normalize "" to NULL
 
     content = await file.read()
     if len(content) > MAX_SIZE:
@@ -184,10 +298,22 @@ async def upload(file: UploadFile = File(...)):
     created_at = datetime.now(timezone.utc).isoformat()
     try:
         async with aiosqlite.connect(DB_PATH) as db:
+            # Re-validate inside the same connection as the INSERT: the folder
+            # may have been deleted while we were processing the image bytes.
+            # Files are already written, so fall back to uncategorized instead
+            # of erroring, rather than persist a dangling folder_id.
+            if folder_id:
+                async with db.execute(
+                    "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+                ) as cursor:
+                    if not await cursor.fetchone():
+                        folder_id = None
             await db.execute(
-                "INSERT INTO images VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO images "
+                "(id, filename, orig_name, size, width, height, mime_type, created_at, folder_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (file_id, filename, file.filename or filename,
-                 len(content), meta["width"], meta["height"], meta["mime"], created_at)
+                 len(content), meta["width"], meta["height"], meta["mime"], created_at, folder_id)
             )
             await db.commit()
     except Exception:
@@ -199,7 +325,7 @@ async def upload(file: UploadFile = File(...)):
     return {
         "id": file_id, "filename": filename, "orig_name": file.filename,
         "size": len(content), "width": meta["width"], "height": meta["height"],
-        "mime_type": meta["mime"], "created_at": created_at,
+        "mime_type": meta["mime"], "created_at": created_at, "folder_id": folder_id,
     }
 
 
@@ -208,16 +334,25 @@ async def upload(file: UploadFile = File(...)):
 async def list_images(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
+    folder: str | None = Query(None),
 ):
     offset = (page - 1) * per_page
+    where, params = "", []
+    if folder == "none":
+        where = "WHERE folder_id IS NULL"
+    elif folder:
+        where, params = "WHERE folder_id = ?", [folder]
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM images ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (per_page, offset)
+            f"SELECT * FROM images {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (*params, per_page, offset)
         ) as cursor:
             rows = await cursor.fetchall()
-        async with db.execute("SELECT COUNT(*) FROM images") as cursor:
+        async with db.execute(
+            f"SELECT COUNT(*) FROM images {where}", params
+        ) as cursor:
             row = await cursor.fetchone()
             total = row[0] if row else 0
 
@@ -225,6 +360,33 @@ async def list_images(
         "total": total, "page": page, "per_page": per_page,
         "images": [dict(r) for r in rows],
     }
+
+
+# ── Move image ─────────────────────────────────────────────────────────────────
+class ImageMove(BaseModel):
+    folder_id: str | None = None
+
+
+@app.patch("/api/images/{image_id}", dependencies=[Depends(require_auth)])
+async def move_image(image_id: str, body: ImageMove):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM images WHERE id = ?", (image_id,)
+        ) as cursor:
+            if not await cursor.fetchone():
+                raise HTTPException(status_code=404, detail="图片不存在")
+        if body.folder_id is not None:
+            async with db.execute(
+                "SELECT 1 FROM folders WHERE id = ?", (body.folder_id,)
+            ) as cursor:
+                if not await cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="文件夹不存在")
+        await db.execute(
+            "UPDATE images SET folder_id = ? WHERE id = ?",
+            (body.folder_id, image_id),
+        )
+        await db.commit()
+    return {"ok": True, "folder_id": body.folder_id}
 
 
 # ── Delete ─────────────────────────────────────────────────────────────────────
