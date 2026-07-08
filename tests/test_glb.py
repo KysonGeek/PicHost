@@ -8,7 +8,7 @@ import pytest
 @pytest.fixture
 def make_glb():
     """Minimal valid GLB: 12-byte header + one JSON chunk, padded to `size`."""
-    def _make(size=None, magic=b"glTF", version=2):
+    def _make(size=None, magic=b"glTF", version=2, truncate=False):
         json_payload = b'{"asset":{"version":"2.0"}}'
         pad = (4 - len(json_payload) % 4) % 4
         json_payload += b" " * pad
@@ -19,7 +19,10 @@ def make_glb():
         chunk = struct.pack("<II", len(json_payload), 0x4E4F534A) + json_payload
         total = 12 + len(chunk)
         header = magic + struct.pack("<II", version, total)
-        return header + chunk
+        full = header + chunk
+        if truncate:
+            return full[:11]
+        return full
     return _make
 
 
@@ -47,13 +50,20 @@ def test_glb_upload_as_octet_stream(client, auth, make_glb):
     assert r.json()["mime_type"] == "model/gltf-binary"
 
 
+def test_glb_upload_with_empty_content_type(client, auth, make_glb):
+    """Some browsers send no content type at all for .glb files."""
+    r = _upload_glb(client, auth, make_glb(), content_type="")
+    assert r.status_code == 200
+    assert r.json()["mime_type"] == "model/gltf-binary"
+
+
 def test_octet_stream_without_glb_name_rejected(client, auth, make_glb):
     r = _upload_glb(client, auth, make_glb(), content_type="application/octet-stream",
                     name="model.bin")
     assert r.status_code == 415
 
 
-@pytest.mark.parametrize("kwargs", [{"magic": b"FAKE"}, {"version": 1}])
+@pytest.mark.parametrize("kwargs", [{"magic": b"FAKE"}, {"version": 1}, {"truncate": True}])
 def test_invalid_glb_bytes_rejected(client, auth, make_glb, mainmod, kwargs):
     r = _upload_glb(client, auth, make_glb(**kwargs))
     assert r.status_code == 415

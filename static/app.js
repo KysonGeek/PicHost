@@ -145,7 +145,7 @@ document.addEventListener('paste', e => {
     .filter(f => f.type.startsWith('image/') || isGlbFile(f));
   if (files.length) {
     uploadFiles(files);
-    showToast('已检测到粘贴的图片，正在上传…');
+    showToast('已检测到粘贴的文件，正在上传…');
   }
 });
 
