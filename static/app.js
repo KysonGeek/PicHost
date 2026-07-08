@@ -21,11 +21,19 @@ const loginPassword = document.getElementById('loginPassword');
 const loginBtn      = document.getElementById('loginBtn');
 const loginError    = document.getElementById('loginError');
 const togglePw      = document.getElementById('togglePw');
+const uploadFolder  = document.getElementById('uploadFolder');
+const folderBar     = document.getElementById('folderBar');
+const moveOverlay   = document.getElementById('moveOverlay');
+const moveList      = document.getElementById('moveList');
+const moveCancel    = document.getElementById('moveCancel');
 
 let galleryPage = 1;
 let galleryTotal = 0;
 const PER_PAGE = 50;
 let toastTimer = null;
+let folders = [];        // [{id, name, created_at, count}]
+let uncatCount = 0;
+let currentFilter = 'all';  // 'all' | 'none' | <folderId>
 
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;  // keep in sync with backend MAX_SIZE
 const ALLOWED_UPLOAD_TYPES = new Set([
@@ -73,7 +81,7 @@ loginForm.addEventListener('submit', async e => {
       setToken(token);
       loginPassword.value = '';
       hideLogin();
-      loadGallery(1);
+      refreshAll();
     } else {
       loginError.textContent = '密钥错误，请重试';
       loginPassword.select();
@@ -175,7 +183,8 @@ function uploadSingle(file) {
   const finish = () => { inflightUploads.delete(id); renderUploadProgress(); };
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload');
+  const targetFolder = uploadFolder.value;
+  xhr.open('POST', '/api/upload' + (targetFolder ? `?folder_id=${encodeURIComponent(targetFolder)}` : ''));
   xhr.setRequestHeader('Authorization', `Bearer ${getToken()}`);
 
   xhr.upload.addEventListener('progress', e => {
@@ -190,10 +199,16 @@ function uploadSingle(file) {
     if (xhr.status === 200) {
       const data = JSON.parse(xhr.responseText);
       prependResult(data);
-      prependGalleryItem(data);
-      galleryTotal++;
-      updateGalleryCount();
-      galleryEmpty.style.display = 'none';
+      const matches = currentFilter === 'all'
+        || (currentFilter === 'none' && !data.folder_id)
+        || currentFilter === data.folder_id;
+      if (matches) {
+        prependGalleryItem(data);
+        galleryTotal++;
+        updateGalleryCount();
+        galleryEmpty.style.display = 'none';
+      }
+      loadFolders();
       showToast('上传成功！', 'success');
     } else if (xhr.status === 401) {
       handleUnauth();
@@ -276,9 +291,75 @@ function linkRow(label, value) {
     </div>`;
 }
 
+/* ── Folders ──────────────────────────────────────────────────────────────── */
+async function loadFolders() {
+  const res = await authFetch('/api/folders');
+  if (!res || !res.ok) return;
+  const data = await res.json();
+  folders = data.folders;
+  uncatCount = data.uncategorized;
+  renderFolderBar();
+  renderUploadSelect();
+}
+
+function folderChip(filter, label, count) {
+  const active = currentFilter === filter ? ' active' : '';
+  const badge = count == null ? '' : `<span class="folder-chip-count">${count}</span>`;
+  return `<button class="folder-chip${active}"
+                  data-filter="${escAttr(filter)}">${escHtml(label)}${badge}</button>`;
+}
+
+function renderFolderBar() {
+  const total = folders.reduce((n, f) => n + f.count, 0) + uncatCount;
+  let html = folderChip('all', '全部', total) + folderChip('none', '未分类', uncatCount);
+  html += folders.map(f => folderChip(f.id, f.name, f.count)).join('');
+  html += `<button class="folder-chip folder-chip-new" data-action="new">＋ 新建文件夹</button>`;
+
+  const selected = folders.find(f => f.id === currentFilter);
+  if (selected) {
+    html += `
+      <span class="chip-actions">
+        <button class="chip-btn" data-action="rename">重命名</button>
+        <button class="chip-btn chip-btn-danger" data-action="remove">删除</button>
+      </span>`;
+  }
+  folderBar.innerHTML = html;
+}
+
+function renderUploadSelect() {
+  const prev = uploadFolder.value;
+  uploadFolder.innerHTML = '<option value="">未分类</option>' +
+    folders.map(f => `<option value="${escAttr(f.id)}">${escHtml(f.name)}</option>`).join('');
+  if ([...uploadFolder.options].some(o => o.value === prev)) uploadFolder.value = prev;
+}
+
+async function refreshAll() {
+  await Promise.all([loadFolders(), loadGallery(1)]);
+}
+
+folderBar.addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === 'new')    { createFolder(); return; }
+  if (action === 'rename') { renameFolder(currentFilter); return; }
+  if (action === 'remove') { removeFolder(currentFilter); return; }
+  if (btn.dataset.filter && btn.dataset.filter !== currentFilter) {
+    currentFilter = btn.dataset.filter;
+    renderFolderBar();
+    loadGallery(1);
+  }
+});
+
+// Implemented in Task 7; placeholder stubs here to avoid runtime errors.
+function createFolder() {}
+function renameFolder(id) {}
+function removeFolder(id) {}
+
 /* ── Gallery ──────────────────────────────────────────────────────────────── */
 async function loadGallery(page = 1, append = false) {
-  const res = await authFetch(`/api/images?page=${page}&per_page=${PER_PAGE}`);
+  const folderQ = currentFilter === 'all' ? '' : `&folder=${encodeURIComponent(currentFilter)}`;
+  const res = await authFetch(`/api/images?page=${page}&per_page=${PER_PAGE}${folderQ}`);
   if (!res) return;
 
   try {
@@ -464,7 +545,7 @@ sections.forEach(s => observer.observe(s));
 /* ── Init ─────────────────────────────────────────────────────────────────── */
 if (getToken()) {
   hideLogin();
-  loadGallery(1);
+  refreshAll();
 } else {
   showLogin();
 }
