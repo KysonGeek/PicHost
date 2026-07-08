@@ -31,9 +31,11 @@ THUMB_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_MIME = {
     "image/jpeg", "image/png", "image/gif",
     "image/webp", "image/bmp", "image/svg+xml",
+    "model/gltf-binary",
 }
-ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".glb"}
 MAX_SIZE = 20 * 1024 * 1024  # 20 MB (compressed upload cap)
+MAX_GLB_SIZE = 100 * 1024 * 1024  # 100 MB cap for .glb models (images stay at MAX_SIZE)
 MAX_PIXELS = 50_000_000      # decoded-pixel cap (decompression-bomb / pixel-flood guard)
 THUMB_SIZE = (400, 400)
 TOKEN_EXPIRE_SECONDS = 30 * 86400  # 30 days
@@ -268,7 +270,14 @@ async def delete_folder(folder_id: str):
 # ── Upload ─────────────────────────────────────────────────────────────────────
 @app.post("/api/upload", dependencies=[Depends(require_auth)])
 async def upload(file: UploadFile = File(...), folder_id: str | None = Query(None)):
-    if file.content_type not in ALLOWED_MIME:
+    name_lower = (file.filename or "").lower()
+    # Browsers commonly report .glb as application/octet-stream or nothing at
+    # all, so fall back to the extension for those; real validation is by bytes.
+    is_glb = file.content_type == "model/gltf-binary" or (
+        name_lower.endswith(".glb")
+        and file.content_type in (None, "", "application/octet-stream")
+    )
+    if not is_glb and file.content_type not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"不支持的文件类型: {file.content_type}")
 
     if folder_id:
@@ -282,15 +291,17 @@ async def upload(file: UploadFile = File(...), folder_id: str | None = Query(Non
         folder_id = None  # normalize "" to NULL
 
     content = await file.read()
-    if len(content) > MAX_SIZE:
-        raise HTTPException(status_code=413, detail="文件大小超过 20MB 限制")
+    size_cap = MAX_GLB_SIZE if is_glb else MAX_SIZE
+    if len(content) > size_cap:
+        limit_label = "100MB" if is_glb else "20MB"
+        raise HTTPException(status_code=413, detail=f"文件大小超过 {limit_label} 限制")
 
     file_id = uuid.uuid4().hex[:12]
     is_svg = file.content_type == "image/svg+xml"
 
     # Validate the actual bytes and write original + thumbnail, off the event loop.
     try:
-        meta = await run_in_threadpool(_process_upload, content, is_svg, file_id)
+        meta = await run_in_threadpool(_process_upload, content, is_svg, is_glb, file_id)
     except _UploadRejected as e:
         raise HTTPException(status_code=415, detail=str(e))
 
@@ -420,6 +431,7 @@ def _mime_to_ext(mime: str) -> str:
     return {
         "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
         "image/webp": ".webp", "image/bmp": ".bmp", "image/svg+xml": ".svg",
+        "model/gltf-binary": ".glb",
     }.get(mime, ".jpg")
 
 
@@ -449,13 +461,23 @@ def _make_thumbnail(img: "Image.Image", dest: Path):
     thumb.save(dest, quality=85, optimize=True)
 
 
-def _process_upload(content: bytes, is_svg: bool, file_id: str) -> dict:
-    """Validate bytes, then write the original + thumbnail. Runs in a threadpool.
+def _process_upload(content: bytes, is_svg: bool, is_glb: bool, file_id: str) -> dict:
+    """Validate bytes, then write the original (+ thumbnail for images).
 
-    Files are written ONLY after validation succeeds, so rejected uploads never
-    persist. Raises _UploadRejected on anything that isn't a supported image.
-    Returns {filename, width, height, mime}.
+    Runs in a threadpool. Files are written ONLY after validation succeeds, so
+    rejected uploads never persist. Raises _UploadRejected on anything that
+    isn't a supported file. Returns {filename, width, height, mime}.
     """
+    if is_glb:
+        # GLB header: magic "glTF" + uint32 version (little-endian) == 2.
+        if len(content) < 12 or content[0:4] != b"glTF" \
+                or int.from_bytes(content[4:8], "little") != 2:
+            raise _UploadRejected("文件内容不是有效的 GLB")
+        filename = f"{file_id}.glb"
+        (UPLOAD_DIR / filename).write_bytes(content)  # no thumbnail for models
+        return {"filename": filename, "width": None, "height": None,
+                "mime": "model/gltf-binary"}
+
     if is_svg:
         head = content.lstrip()[:512].lower()
         if b"<svg" not in head and b"<?xml" not in head:

@@ -33,7 +33,7 @@
       <!-- Upload zone -->
       <div class="upload-card">
         <div class="upload-zone" id="uploadZone">
-          <input type="file" id="fileInput" accept="image/*" multiple hidden />
+          <input type="file" id="fileInput" accept="image/*,.glb" multiple hidden />
           <div class="upload-icon">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -43,7 +43,7 @@
           </div>
           <p class="upload-hint-main">点击选择 或 拖拽图片到此处</p>
           <p class="upload-hint-sub">也可按 <kbd>Ctrl+V</kbd> 直接粘贴截图</p>
-          <p class="upload-hint-sub">支持 JPG · PNG · GIF · WebP · BMP · SVG &nbsp;|&nbsp; 最大 20MB</p>
+          <p class="upload-hint-sub">支持 JPG · PNG · GIF · WebP · BMP · SVG · GLB &nbsp;|&nbsp; 图片最大 20MB · 模型最大 100MB</p>
         </div>
 
         <!-- Target folder -->
@@ -96,6 +96,7 @@
     <div class="lightbox-backdrop" id="lightboxBackdrop"></div>
     <div class="lightbox-content">
       <img class="lightbox-img" id="lightboxImg" src="" alt="" />
+      <div class="lightbox-glb" id="lightboxGlb" style="display:none"></div>
       <button class="lightbox-close" id="lightboxClose">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
