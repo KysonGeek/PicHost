@@ -333,18 +333,18 @@ function folderChip(filter, label, count) {
 
 function renderFolderBar() {
   const total = folders.reduce((n, f) => n + f.count, 0) + uncatCount;
-  let html = folderChip('all', '全部', total) + folderChip('none', '未分类', uncatCount);
-  html += folders.map(f => folderChip(f.id, f.name, f.count)).join('');
-  html += `<button class="folder-chip folder-chip-new" data-action="new">＋ 新建文件夹</button>`;
-
-  const selected = folders.find(f => f.id === currentFilter);
-  if (selected) {
-    html += `
+  // Rename/delete actions render right next to the selected folder chip so
+  // they read as part of it, not as a stray control at the end of the bar.
+  const actions = `
       <span class="chip-actions">
         <button class="chip-btn" data-action="rename">重命名</button>
         <button class="chip-btn chip-btn-danger" data-action="remove">删除</button>
       </span>`;
-  }
+  let html = folderChip('all', '全部', total) + folderChip('none', '未分类', uncatCount);
+  html += folders.map(f =>
+    folderChip(f.id, f.name, f.count) + (f.id === currentFilter ? actions : '')
+  ).join('');
+  html += `<button class="folder-chip folder-chip-new" data-action="new">＋ 新建文件夹</button>`;
   folderBar.innerHTML = html;
 }
 

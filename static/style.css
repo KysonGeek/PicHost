@@ -655,11 +655,12 @@ kbd {
 }
 .folder-chip.active .folder-chip-count { background: rgba(255,255,255,.22); }
 .folder-chip-new { border-style: dashed; color: var(--text-muted); }
-.chip-actions { display: inline-flex; gap: 6px; margin-left: 2px; }
+.chip-actions { display: inline-flex; gap: 8px; }
+/* Same pill metrics as .folder-chip so the actions read as chip siblings. */
 .chip-btn {
-  padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px;
-  background: var(--surface2); color: var(--text-muted); font-size: .78rem;
-  cursor: pointer;
+  padding: 6px 14px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface2); color: var(--text-muted); font-size: .85rem;
+  cursor: pointer; transition: all .15s;
 }
 .chip-btn:hover { color: var(--primary); border-color: var(--primary-light); }
 .chip-btn-danger:hover { color: var(--danger); border-color: var(--danger); }
