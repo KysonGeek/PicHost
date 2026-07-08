@@ -115,6 +115,20 @@
     </div>
   </div>
 
+  <!-- App dialog (input / confirm) -->
+  <div class="dialog-overlay hidden" id="dialogOverlay">
+    <div class="dialog-card">
+      <h3 class="dialog-title" id="dialogTitle"></h3>
+      <p class="dialog-message" id="dialogMessage" style="display:none"></p>
+      <input class="dialog-input" id="dialogInput" style="display:none" maxlength="50" />
+      <p class="dialog-error" id="dialogError"></p>
+      <div class="dialog-actions">
+        <button class="dialog-btn dialog-cancel" id="dialogCancel">取消</button>
+        <button class="dialog-btn dialog-confirm" id="dialogConfirm">确定</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 

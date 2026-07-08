@@ -583,6 +583,73 @@ async function confirmDelete(id, itemEl) {
   }
 }
 
+/* ── App dialog (input / confirm) ─────────────────────────────────────────── */
+const dialogOverlay = document.getElementById('dialogOverlay');
+const dialogTitle   = document.getElementById('dialogTitle');
+const dialogMessage = document.getElementById('dialogMessage');
+const dialogInput   = document.getElementById('dialogInput');
+const dialogError   = document.getElementById('dialogError');
+const dialogCancel  = document.getElementById('dialogCancel');
+const dialogConfirm = document.getElementById('dialogConfirm');
+
+let dialogResolve = null;   // pending promise resolver; null = no dialog open
+let dialogMode = null;      // 'input' | 'confirm'
+
+function openDialog({ title, message = '', input = false, value = '', confirmText = '确定', danger = false }) {
+  dialogTitle.textContent = title;
+  dialogMessage.textContent = message;   // user-controlled text stays textContent
+  dialogMessage.style.display = message ? '' : 'none';
+  dialogInput.style.display = input ? '' : 'none';
+  dialogInput.value = value;
+  dialogError.textContent = '';
+  dialogConfirm.textContent = confirmText;
+  dialogConfirm.classList.toggle('dialog-danger', danger);
+  dialogMode = input ? 'input' : 'confirm';
+  dialogOverlay.classList.remove('hidden');
+  if (input) { dialogInput.focus(); dialogInput.select(); }
+  else dialogConfirm.focus();
+  return new Promise(resolve => { dialogResolve = resolve; });
+}
+
+function settleDialog(result) {
+  if (!dialogResolve) return;  // no dialog open — safe to call blindly (Esc handler)
+  const resolve = dialogResolve;
+  dialogResolve = null;
+  dialogOverlay.classList.add('hidden');
+  resolve(result);
+}
+
+function showInputDialog({ title, value = '', confirmText = '确定' }) {
+  return openDialog({ title, input: true, value, confirmText });
+}
+
+function showConfirmDialog({ title, message, confirmText = '确定', danger = false }) {
+  return openDialog({ title, message, confirmText, danger });
+}
+
+function submitDialog() {
+  if (dialogMode === 'input') {
+    const name = dialogInput.value.trim();
+    if (!name || name.length > 50) {
+      dialogError.textContent = '名称需为 1-50 个字符';
+      dialogInput.focus();
+      return;  // keep the dialog open
+    }
+    settleDialog(name);
+  } else {
+    settleDialog(true);
+  }
+}
+
+function cancelDialog() { settleDialog(dialogMode === 'input' ? null : false); }
+
+dialogConfirm.addEventListener('click', submitDialog);
+dialogCancel.addEventListener('click', cancelDialog);
+dialogOverlay.addEventListener('click', e => { if (e.target === dialogOverlay) cancelDialog(); });
+dialogInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); submitDialog(); }
+});
+
 /* ── Lightbox ─────────────────────────────────────────────────────────────── */
 function openLightbox(url, name, glb = false) {
   if (glb) {
@@ -621,7 +688,7 @@ function closeLightbox() {
 document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
 document.getElementById('lightboxBackdrop').addEventListener('click', closeLightbox);
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeLightbox(); closeMoveModal(); }
+  if (e.key === 'Escape') { closeLightbox(); closeMoveModal(); cancelDialog(); }
 });
 
 /* ── Copy helper ──────────────────────────────────────────────────────────── */

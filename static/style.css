@@ -708,3 +708,35 @@ kbd {
 }
 .lightbox-glb p { color: var(--text-muted); font-size: .9rem; max-width: 320px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── App dialog ──────────────────────────────────────────────────────────── */
+.dialog-overlay {
+  position: fixed; inset: 0; z-index: 1300;
+  background: rgba(15,23,42,.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.dialog-overlay.hidden { display: none; }
+.dialog-card {
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 24px; width: min(92vw, 360px);
+}
+.dialog-title { font-size: 1.05rem; margin-bottom: 14px; }
+.dialog-message { color: var(--text-muted); font-size: .92rem; line-height: 1.6; margin-bottom: 4px; }
+.dialog-input {
+  width: 100%; padding: 10px 14px; border: 1px solid var(--border);
+  border-radius: 10px; font-size: .95rem; background: var(--surface2);
+  color: var(--text); outline: none;
+}
+.dialog-input:focus { border-color: var(--primary); }
+.dialog-error { color: var(--danger); font-size: .8rem; min-height: 1.1em; margin-top: 6px; }
+.dialog-actions { display: flex; gap: 10px; margin-top: 16px; }
+.dialog-btn {
+  flex: 1; padding: 9px; border: none; border-radius: 10px;
+  font-size: .9rem; cursor: pointer; transition: all .15s;
+}
+.dialog-cancel { background: var(--surface2); color: var(--text-muted); }
+.dialog-cancel:hover { color: var(--text); }
+.dialog-confirm { background: var(--primary); color: #fff; }
+.dialog-confirm:hover { background: var(--primary-dark); }
+.dialog-confirm.dialog-danger { background: var(--danger); }
+.dialog-confirm.dialog-danger:hover { background: #dc2626; }
