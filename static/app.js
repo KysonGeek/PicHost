@@ -40,10 +40,15 @@ let galleryReq = 0;
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;  // keep in sync with backend MAX_SIZE
 const MAX_GLB_UPLOAD_SIZE = 100 * 1024 * 1024;  // keep in sync with backend MAX_GLB_SIZE
 const ALLOWED_UPLOAD_TYPES = new Set([
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml', 'model/gltf-binary',
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml', 'image/heic', 'image/heif', 'model/gltf-binary',
 ]);
 
 function isGlbFile(file) { return (file.name || '').toLowerCase().endsWith('.glb'); }
+
+function hasSniffableExt(file) {
+  const n = (file.name || '').toLowerCase();
+  return n.endsWith('.glb') || n.endsWith('.heic') || n.endsWith('.heif');
+}
 
 // In-flight uploads keyed by a sequence id, for aggregate progress display.
 const inflightUploads = new Map();
@@ -126,7 +131,7 @@ uploadZone.addEventListener('dragleave', e => {
 uploadZone.addEventListener('drop', e => {
   e.preventDefault();
   uploadZone.classList.remove('dragging');
-  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/') || isGlbFile(f));
+  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/') || hasSniffableExt(f));
   if (files.length) uploadFiles(files);
 });
 
@@ -142,7 +147,7 @@ document.addEventListener('paste', e => {
     .filter(i => i.kind === 'file')
     .map(i => i.getAsFile())
     .filter(Boolean)
-    .filter(f => f.type.startsWith('image/') || isGlbFile(f));
+    .filter(f => f.type.startsWith('image/') || hasSniffableExt(f));
   if (files.length) {
     uploadFiles(files);
     showToast('已检测到粘贴的文件，正在上传…');
