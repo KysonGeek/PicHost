@@ -374,7 +374,7 @@ folderBar.addEventListener('click', e => {
 });
 
 async function createFolder() {
-  const name = (prompt('新文件夹名称:') || '').trim();
+  const name = await showInputDialog({ title: '新建文件夹', confirmText: '创建' });
   if (!name) return;
   const res = await authFetch('/api/folders', {
     method: 'POST',
@@ -394,7 +394,7 @@ async function createFolder() {
 async function renameFolder(id) {
   const cur = folders.find(f => f.id === id);
   if (!cur) return;
-  const name = (prompt('重命名文件夹:', cur.name) || '').trim();
+  const name = await showInputDialog({ title: '重命名文件夹', value: cur.name, confirmText: '保存' });
   if (!name || name === cur.name) return;
   const res = await authFetch(`/api/folders/${encodeURIComponent(id)}`, {
     method: 'PATCH',
@@ -414,7 +414,12 @@ async function renameFolder(id) {
 async function removeFolder(id) {
   const cur = folders.find(f => f.id === id);
   if (!cur) return;
-  if (!confirm(`删除文件夹「${cur.name}」？其中的图片将回到「未分类」。`)) return;
+  const ok = await showConfirmDialog({
+    title: '删除文件夹',
+    message: `删除「${cur.name}」？其中的图片将回到「未分类」。`,
+    confirmText: '删除', danger: true,
+  });
+  if (!ok) return;
   const res = await authFetch(`/api/folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res) return;
   if (res.ok) {
@@ -563,7 +568,12 @@ moveOverlay.addEventListener('click', e => { if (e.target === moveOverlay) close
 
 /* ── Delete ───────────────────────────────────────────────────────────────── */
 async function confirmDelete(id, itemEl) {
-  if (!confirm('确定要删除这张图片吗？此操作不可撤销。')) return;
+  const ok = await showConfirmDialog({
+    title: '删除图片',
+    message: '确定要删除这张图片吗？此操作不可撤销。',
+    confirmText: '删除', danger: true,
+  });
+  if (!ok) return;
   const res = await authFetch(`/api/images/${id}`, { method: 'DELETE' });
   if (!res) return;
   if (res.ok) {
@@ -582,6 +592,76 @@ async function confirmDelete(id, itemEl) {
     showToast('删除失败', 'error');
   }
 }
+
+/* ── App dialog (input / confirm) ─────────────────────────────────────────── */
+const dialogOverlay = document.getElementById('dialogOverlay');
+const dialogTitle   = document.getElementById('dialogTitle');
+const dialogMessage = document.getElementById('dialogMessage');
+const dialogInput   = document.getElementById('dialogInput');
+const dialogError   = document.getElementById('dialogError');
+const dialogCancel  = document.getElementById('dialogCancel');
+const dialogConfirm = document.getElementById('dialogConfirm');
+
+let dialogResolve = null;   // pending promise resolver; null = no dialog open
+let dialogMode = null;      // 'input' | 'confirm'
+
+function openDialog({ title, message = '', input = false, value = '', confirmText = '确定', danger = false }) {
+  cancelDialog();  // settle any dialog already open so its promise never leaks
+  dialogTitle.textContent = title;
+  dialogMessage.textContent = message;   // user-controlled text stays textContent
+  dialogMessage.style.display = message ? '' : 'none';
+  dialogInput.style.display = input ? '' : 'none';
+  dialogInput.value = value;
+  dialogError.textContent = '';
+  dialogConfirm.textContent = confirmText;
+  dialogConfirm.classList.toggle('dialog-danger', danger);
+  dialogMode = input ? 'input' : 'confirm';
+  dialogOverlay.classList.remove('hidden');
+  if (input) { dialogInput.focus(); dialogInput.select(); }
+  else if (danger) dialogCancel.focus();  // never default-focus a destructive action
+  else dialogConfirm.focus();
+  return new Promise(resolve => { dialogResolve = resolve; });
+}
+
+function settleDialog(result) {
+  if (!dialogResolve) return;  // no dialog open — safe to call blindly (Esc handler)
+  const resolve = dialogResolve;
+  dialogResolve = null;
+  dialogOverlay.classList.add('hidden');
+  resolve(result);
+}
+
+function showInputDialog({ title, value = '', confirmText = '确定' }) {
+  return openDialog({ title, input: true, value, confirmText });
+}
+
+function showConfirmDialog({ title, message, confirmText = '确定', danger = false }) {
+  return openDialog({ title, message, confirmText, danger });
+}
+
+function submitDialog() {
+  if (dialogMode === 'input') {
+    const name = dialogInput.value.trim();
+    if (!name || name.length > 50) {
+      dialogError.textContent = '名称需为 1-50 个字符';
+      dialogInput.focus();
+      return;  // keep the dialog open
+    }
+    settleDialog(name);
+  } else {
+    settleDialog(true);
+  }
+}
+
+function cancelDialog() { settleDialog(dialogMode === 'input' ? null : false); }
+
+dialogConfirm.addEventListener('click', submitDialog);
+dialogCancel.addEventListener('click', cancelDialog);
+dialogOverlay.addEventListener('click', e => { if (e.target === dialogOverlay) cancelDialog(); });
+dialogInput.addEventListener('keydown', e => {
+  if (e.isComposing || e.keyCode === 229) return;  // IME composition in flight
+  if (e.key === 'Enter') { e.preventDefault(); submitDialog(); }
+});
 
 /* ── Lightbox ─────────────────────────────────────────────────────────────── */
 function openLightbox(url, name, glb = false) {
@@ -621,7 +701,8 @@ function closeLightbox() {
 document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
 document.getElementById('lightboxBackdrop').addEventListener('click', closeLightbox);
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeLightbox(); closeMoveModal(); }
+  if (e.isComposing || e.keyCode === 229) return;  // IME composition in flight
+  if (e.key === 'Escape') { closeLightbox(); closeMoveModal(); cancelDialog(); }
 });
 
 /* ── Copy helper ──────────────────────────────────────────────────────────── */
