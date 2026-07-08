@@ -119,3 +119,36 @@ def test_folder_delete(client, auth):
 def test_folders_require_auth(client):
     assert client.get("/api/folders").status_code == 401
     assert client.post("/api/folders", json={"name": "x"}).status_code == 401
+
+
+# ── Upload into folder ────────────────────────────────────────────────────────
+def _upload(client, auth, make_png, folder_id=None, name="x.png"):
+    url = "/api/upload" + (f"?folder_id={folder_id}" if folder_id else "")
+    return client.post(url, headers=auth,
+                       files={"file": (name, make_png(), "image/png")})
+
+
+def test_upload_into_folder(client, auth, make_png):
+    fid = _create_folder(client, auth, "壁纸").json()["id"]
+    r = _upload(client, auth, make_png, folder_id=fid)
+    assert r.status_code == 200
+    assert r.json()["folder_id"] == fid
+
+    data = client.get("/api/folders", headers=auth).json()
+    assert data["folders"][0]["count"] == 1
+    assert data["uncategorized"] == 0
+
+
+def test_upload_into_missing_folder_rejected(client, auth, make_png, mainmod):
+    r = _upload(client, auth, make_png, folder_id="nope")
+    assert r.status_code == 404
+    conn = sqlite3.connect(mainmod.DB_PATH)
+    n = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+    conn.close()
+    assert n == 0  # nothing persisted for a rejected upload
+
+
+def test_upload_without_folder_reports_null(client, auth, make_png):
+    r = _upload(client, auth, make_png)
+    assert r.status_code == 200
+    assert r.json()["folder_id"] is None

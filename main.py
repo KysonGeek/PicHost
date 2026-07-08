@@ -261,9 +261,19 @@ async def delete_folder(folder_id: str):
 
 # ── Upload ─────────────────────────────────────────────────────────────────────
 @app.post("/api/upload", dependencies=[Depends(require_auth)])
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), folder_id: str | None = Query(None)):
     if file.content_type not in ALLOWED_MIME:
         raise HTTPException(status_code=415, detail=f"不支持的文件类型: {file.content_type}")
+
+    if folder_id:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT 1 FROM folders WHERE id = ?", (folder_id,)
+            ) as cursor:
+                if not await cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="文件夹不存在")
+    else:
+        folder_id = None  # normalize "" to NULL
 
     content = await file.read()
     if len(content) > MAX_SIZE:
@@ -287,7 +297,7 @@ async def upload(file: UploadFile = File(...)):
                 "(id, filename, orig_name, size, width, height, mime_type, created_at, folder_id) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
                 (file_id, filename, file.filename or filename,
-                 len(content), meta["width"], meta["height"], meta["mime"], created_at, None)
+                 len(content), meta["width"], meta["height"], meta["mime"], created_at, folder_id)
             )
             await db.commit()
     except Exception:
@@ -299,7 +309,7 @@ async def upload(file: UploadFile = File(...)):
     return {
         "id": file_id, "filename": filename, "orig_name": file.filename,
         "size": len(content), "width": meta["width"], "height": meta["height"],
-        "mime_type": meta["mime"], "created_at": created_at,
+        "mime_type": meta["mime"], "created_at": created_at, "folder_id": folder_id,
     }
 
 
