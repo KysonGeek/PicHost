@@ -374,7 +374,7 @@ folderBar.addEventListener('click', e => {
 });
 
 async function createFolder() {
-  const name = (prompt('新文件夹名称:') || '').trim();
+  const name = await showInputDialog({ title: '新建文件夹', confirmText: '创建' });
   if (!name) return;
   const res = await authFetch('/api/folders', {
     method: 'POST',
@@ -394,7 +394,7 @@ async function createFolder() {
 async function renameFolder(id) {
   const cur = folders.find(f => f.id === id);
   if (!cur) return;
-  const name = (prompt('重命名文件夹:', cur.name) || '').trim();
+  const name = await showInputDialog({ title: '重命名文件夹', value: cur.name, confirmText: '保存' });
   if (!name || name === cur.name) return;
   const res = await authFetch(`/api/folders/${encodeURIComponent(id)}`, {
     method: 'PATCH',
@@ -414,7 +414,12 @@ async function renameFolder(id) {
 async function removeFolder(id) {
   const cur = folders.find(f => f.id === id);
   if (!cur) return;
-  if (!confirm(`删除文件夹「${cur.name}」？其中的图片将回到「未分类」。`)) return;
+  const ok = await showConfirmDialog({
+    title: '删除文件夹',
+    message: `删除「${cur.name}」？其中的图片将回到「未分类」。`,
+    confirmText: '删除', danger: true,
+  });
+  if (!ok) return;
   const res = await authFetch(`/api/folders/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res) return;
   if (res.ok) {
@@ -563,7 +568,12 @@ moveOverlay.addEventListener('click', e => { if (e.target === moveOverlay) close
 
 /* ── Delete ───────────────────────────────────────────────────────────────── */
 async function confirmDelete(id, itemEl) {
-  if (!confirm('确定要删除这张图片吗？此操作不可撤销。')) return;
+  const ok = await showConfirmDialog({
+    title: '删除图片',
+    message: '确定要删除这张图片吗？此操作不可撤销。',
+    confirmText: '删除', danger: true,
+  });
+  if (!ok) return;
   const res = await authFetch(`/api/images/${id}`, { method: 'DELETE' });
   if (!res) return;
   if (res.ok) {
