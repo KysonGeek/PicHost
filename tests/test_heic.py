@@ -1,4 +1,5 @@
-"""HEIC/HEIF upload: transcode to JPEG, strip metadata, keep pipeline uniform."""
+"""Apple photo uploads (HEIC/HEIF and multi-frame MPO): transcode to JPEG,
+strip metadata, keep pipeline uniform."""
 import io
 
 import pytest
@@ -111,3 +112,48 @@ def test_heic_joins_folders(client, auth, make_heic):
     assert r.status_code == 200 and r.json()["folder_id"] == fid
     listed = client.get(f"/api/images?folder={fid}", headers=auth).json()
     assert listed["total"] == 1
+
+
+# ── MPO (iPhone multi-frame JPEG) ─────────────────────────────────────────────
+@pytest.fixture
+def make_mpo():
+    """Two-frame MPO (what iPhones produce for burst/depth shots)."""
+    def _make(width=32, height=16, tagged=False):
+        f1 = Image.new("RGB", (width, height), (200, 10, 10))
+        f2 = Image.new("RGB", (width, height), (10, 10, 200))
+        exif = f1.getexif()
+        if tagged:
+            exif[0x010F] = "Apple"               # Make
+            exif[0x0132] = "2026:07:09 10:00:00" # DateTime
+        buf = io.BytesIO()
+        kwargs = {"exif": exif.tobytes()} if tagged else {}
+        f1.save(buf, format="MPO", save_all=True, append_images=[f2], **kwargs)
+        return buf.getvalue()
+    return _make
+
+
+def test_mpo_transcodes_to_single_frame_jpeg(client, auth, make_mpo, mainmod):
+    """iPhone MPO uploads must not 415; first frame becomes a plain JPEG."""
+    r = client.post("/api/upload", headers=auth,
+                    files={"file": ("burst.jpg", make_mpo(), "image/jpeg")})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["mime_type"] == "image/jpeg"
+    assert data["filename"].endswith(".jpg")
+    assert data["width"] == 32 and data["height"] == 16
+
+    stored = mainmod.UPLOAD_DIR / data["filename"]
+    with Image.open(stored) as out:
+        assert out.format == "JPEG"
+        assert getattr(out, "n_frames", 1) == 1  # hidden frames dropped
+    assert (mainmod.THUMB_DIR / data["filename"]).exists()
+
+
+def test_mpo_metadata_stripped(client, auth, make_mpo, mainmod):
+    r = client.post("/api/upload", headers=auth,
+                    files={"file": ("burst.jpg", make_mpo(tagged=True), "image/jpeg")})
+    assert r.status_code == 200
+    stored = mainmod.UPLOAD_DIR / r.json()["filename"]
+    with Image.open(stored) as out:
+        assert dict(out.getexif()) == {}
+    assert b"Apple" not in stored.read_bytes()

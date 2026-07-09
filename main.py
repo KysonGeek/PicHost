@@ -498,10 +498,12 @@ def _process_upload(content: bytes, is_svg: bool, is_glb: bool, file_id: str) ->
     try:
         with Image.open(io.BytesIO(content)) as src:
             fmt = (src.format or "").upper()
-            if fmt == "HEIF":
+            if fmt in ("HEIF", "MPO"):
                 # Apple photos: transcode to JPEG so links render in every
-                # browser. Orientation is baked into pixels and no EXIF is
-                # written — GPS/device metadata must not leak via public URLs.
+                # browser. MPO (iPhone burst/depth shots) keeps only the first
+                # frame — hidden frames must not leak. Orientation is baked
+                # into pixels and no EXIF is written — GPS/device metadata
+                # must not leak via public URLs.
                 w0, h0 = src.size
                 if w0 * h0 > MAX_PIXELS:
                     raise _UploadRejected("图片像素数超过限制")
